@@ -6,6 +6,12 @@ linters:
     - gomodguard  # deprecated
     - wsl  # deprecated
   settings:
+    depguard:
+      rules:
+        main:
+          allow:
+            - $gostd
+            - github.com/tkngch/fizzled-go/internal/worker
     goconst:
       ignore-tests: true
   exclusions:
