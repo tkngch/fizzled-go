@@ -11,7 +11,7 @@ reaches zero. The service provides a gRPC API over mTLS.
 - [Design](#design)
   - [CLI client commands](#cli-client-commands)
   - [Server](#server), including the [gRPC API](#grpc-api) and [Job state machine](#job-state-machine)
-  - [Worker](#worker) and [Broadcaster](#broadcaster)
+  - [Worker](#worker), including [output buffering and fan-out](#output-buffering-and-fan-out)
   - [Authentication](#authentication) and [Authorization](#authorization)
   - [Audit and observability](#audit-and-observability)
   - [Secrets](#secrets)
@@ -51,8 +51,8 @@ API.
 - Authorization: derived from the client certificate identity (URI SAN).
   Owner-only: an agent may act on and see only the countdowns it started.
 
-- No-poll discovery: new output is delivered via a broadcaster without busy-wait
-  or polling.
+- No-poll discovery: new output is pushed to subscribers without busy-wait or
+  polling.
 
 - Concurrency: many countdowns and many subscribers per countdown.
 
@@ -119,10 +119,11 @@ The CLI program is called `fizzle`.
 
 ### Server
 
-- Maintain, per job-ID, the job's owner and status, and its output buffer.
-  Ownership is derived from the authenticated SPIFFE identity (see
-  [Authentication](#authentication)). Register these per-job facts atomically as
-  one unit under a single synchronization boundary, so no lookup ever sees a
+- Maintain a registry that maps each job-ID to its job and owner. Ownership is
+  derived from the authenticated SPIFFE identity (see
+  [Authentication](#authentication)); the job itself owns its status and output
+  buffer (see [Worker](#worker)). Register each job-ID's entry atomically as one
+  unit under the registry's synchronization boundary, so no lookup ever sees a
   partially-registered job, and support concurrent access (see
   [Start](#grpc-api) and [Job state machine](#job-state-machine)).
 
@@ -266,8 +267,8 @@ and the remaining count in JSON on every tick: for example, `{"elapsed": 12.3,
 - On stop request, cancel the task. This is best-effort cancellation,
   because the task naturally exits when the count reaches zero.
 
-- Capture the output from the task, via an in-memory broadcaster (described
-  below).
+- Capture the output from the task into the job's own in-memory output buffer
+  (see [Output buffering and fan-out](#output-buffering-and-fan-out) below).
 
 - When the worker task exits without an error, compare-and-set the status from
   `RUNNING` to `COMPLETED` (see [Job state machine](#job-state-machine)) and, as
@@ -290,41 +291,47 @@ and the remaining count in JSON on every tick: for example, `{"elapsed": 12.3,
 
 - Cancel all worker tasks when the server exits.
 
-#### Broadcaster
+#### Output buffering and fan-out
 
-- Use in-memory pub-sub pattern
+Output buffering and fan-out are per-job responsibilities of the worker: each
+job owns its own output buffer, and any number of subscribers can read it
+concurrently. A _subscriber_ is a single in-flight `StreamOutput` stream (see
+[StreamOutput](#grpc-api)). There is no separate shared component; the server's
+registry (see [Server](#server)) is what maps a job-ID to the job a subscriber
+reads from.
 
-  - Store outputs from a worker task in an unbounded buffer.
+- Store the job's outputs in an unbounded, append-only buffer owned by the job.
+  The buffer and the job's status share a single synchronization boundary, so a
+  terminal transition and its sentinel append happen as one unit (see [Job state
+  machine](#job-state-machine)).
 
-  - Maintain a map of job-ID to the unbounded buffer in a producer.
+- When a client starts streaming, the subscriber replays every buffer entry from
+  the start and then follows live output. Each subscriber tracks its own read
+  position; the job keeps no per-subscriber state, so a client that disconnects
+  and reconnects gets a fresh replay from the start (see
+  [StreamOutput](#grpc-api)).
 
-  - Create a subscription task in the producer, when the client starts
-    streaming the outputs.
+- When a new output arrives, append it to the buffer and then signal every
+  subscriber. Each signalled subscriber reads forward from its own position,
+  pushes the new entries to its client, and suspends again once it reaches the
+  current end of the buffer. Serialize the append-then-signal and each
+  subscriber's check-position-then-suspend so the two cannot interleave;
+  otherwise an output arriving between a subscriber observing the end of the
+  buffer and suspending would be lost.
 
-  - Publish outputs to subscription tasks. Within each task, maintain a
-    cursor/index on the producer's output buffer.
+- Wake a suspended subscriber on either of two events: a new-output signal, or
+  the client disconnecting. On disconnect, stop the subscriber so it stops
+  reading the buffer; the job keeps no per-subscriber state to clean up. Server
+  shutdown needs no separate wakeup path, because the worker appends the
+  `{"error": "stopped"}` sentinel, which wakes suspended subscribers (see
+  [Worker](#worker) and the shutdown sequence under [Server](#server)).
 
-  - When a new output arrives, append it to the buffer and then signal every
-    subscription task. Each signalled task reads forward from its
-    cursor, streams the new entries to the client, and suspends again once its
-    cursor reaches the current end of the buffer. Serialize the
-    append-then-signal and the check-cursor-then-suspend so the two cannot
-    interleave. Otherwise an output arriving between a task observing the
-    buffer end and suspending would be lost.
+- Do not delete the buffer after the worker task exits and all subscribers stop
+  reading. Memory usage will grow unbounded, but it is an acceptable defect for
+  this project.
 
-  - Wake a suspended subscription task on either of two events: a
-    new-output signal, or the client disconnecting. On disconnect, cancel the
-    task and unsubscribe from the producer. Server shutdown needs no
-    separate wakeup path, because the worker appends the `{"error": "stopped"}`
-    sentinel, which wakes suspended tasks (see [Worker](#worker) and the
-    shutdown sequence under [Server](#server)).
-
-  - Do not delete the buffer with outputs after the worker task exits and
-    all subscribers unsubscribe. Memory usage will grow unbounded, but it is an
-    acceptable defect for this project.
-
-  - Do not disconnect a subscriber when the client certificate expires. It is an
-    acceptable risk for this project.
+- Do not disconnect a subscriber when the client certificate expires. It is an
+  acceptable risk for this project.
 
 ### Authentication
 
