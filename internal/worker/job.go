@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// JobID identifies a job.
-type JobID string
-
 // Job is a stochastic countdown job.
 type Job struct {
 	id     JobID
@@ -33,6 +30,10 @@ type Job struct {
 
 // MaxCount is the largest count a job accepts.
 const MaxCount = 100
+
+// MeanTickInterval is the mean interval between a job's ticks. The countdown's
+// stochasticity parameters are fixed policy, not a caller knob.
+const MeanTickInterval = time.Second
 
 var (
 	// ErrInvalidCount indicates that a count is invalid.

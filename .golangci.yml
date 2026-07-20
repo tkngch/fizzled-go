@@ -11,7 +11,7 @@ linters:
         main:
           allow:
             - $gostd
-            - github.com/tkngch/fizzled-go/internal/worker
+            - github.com/tkngch/fizzled-go/internal/
     goconst:
       ignore-tests: true
   exclusions:
