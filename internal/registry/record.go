@@ -6,6 +6,7 @@ import (
 	"iter"
 	"maps"
 
+	"github.com/tkngch/fizzled-go/internal/authz"
 	"github.com/tkngch/fizzled-go/internal/worker"
 )
 
@@ -13,12 +14,12 @@ import (
 // not guarded by Mutex and is not concurrency-safe. A caller, Registry, has to
 // guard its access.
 type record struct {
-	agentID AgentID
+	agentID authz.AgentID
 	counter int
 	jobs    map[worker.JobID]*worker.Job
 }
 
-func newRecord(agentID AgentID) *record {
+func newRecord(agentID authz.AgentID) *record {
 	return &record{
 		agentID: agentID,
 		counter: 0,
