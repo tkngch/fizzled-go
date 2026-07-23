@@ -6,14 +6,14 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tkngch/fizzled-go/internal/authz"
+	"github.com/tkngch/fizzled-go/internal/authn"
 	"github.com/tkngch/fizzled-go/internal/registry"
 	"github.com/tkngch/fizzled-go/internal/worker"
 )
 
 const (
-	agentSmith authz.AgentID = "smith"
-	agentJones authz.AgentID = "jones"
+	agentSmith authn.AgentID = "smith"
+	agentJones authn.AgentID = "jones"
 )
 
 func TestRegistry(t *testing.T) {
@@ -154,12 +154,12 @@ func TestRegistryFind(t *testing.T) {
 	reg := registry.New()
 	t.Cleanup(reg.Shutdown)
 
-	jobIDs := make(map[authz.AgentID]worker.JobID)
+	jobIDs := make(map[authn.AgentID]worker.JobID)
 
 	jobIDs[agentSmith] = mustCreateJob(t, reg, agentSmith)
 	jobIDs[agentJones] = mustCreateJob(t, reg, agentJones)
 
-	for _, agent := range []authz.AgentID{agentSmith, agentJones, "ghost"} {
+	for _, agent := range []authn.AgentID{agentSmith, agentJones, "ghost"} {
 		for owner, jobID := range jobIDs {
 			job, isFound := reg.Find(agent, jobID)
 			if agent == owner {
@@ -272,7 +272,7 @@ func TestRegistryCreateAfterShutdown(t *testing.T) {
 	}
 }
 
-func mustCreateJob(t *testing.T, reg *registry.Registry, agentID authz.AgentID) worker.JobID {
+func mustCreateJob(t *testing.T, reg *registry.Registry, agentID authn.AgentID) worker.JobID {
 	t.Helper()
 
 	jobID, err := reg.Create(t.Context(), agentID, 10)
@@ -286,7 +286,7 @@ func mustCreateJob(t *testing.T, reg *registry.Registry, agentID authz.AgentID) 
 func mustFindJob(
 	t *testing.T,
 	reg *registry.Registry,
-	agent authz.AgentID,
+	agent authn.AgentID,
 	jobID worker.JobID,
 ) *worker.Job {
 	t.Helper()

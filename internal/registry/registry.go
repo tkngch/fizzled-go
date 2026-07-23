@@ -7,13 +7,13 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/tkngch/fizzled-go/internal/authz"
+	"github.com/tkngch/fizzled-go/internal/authn"
 	"github.com/tkngch/fizzled-go/internal/worker"
 )
 
 // Registry keeps records of all jobs.
 type Registry struct {
-	records map[authz.AgentID]*record
+	records map[authn.AgentID]*record
 
 	// mutex guards records and isAcceptingJobs together, so Create's flag check
 	// and its job registration happen as one unit, and Shutdown can never
@@ -30,7 +30,7 @@ var ErrNotAcceptingJobs = errors.New("not accepting jobs")
 // New creates a fresh Registry with no record.
 func New() *Registry {
 	return &Registry{
-		records:         make(map[authz.AgentID]*record),
+		records:         make(map[authn.AgentID]*record),
 		mutex:           sync.Mutex{},
 		isAcceptingJobs: true,
 	}
@@ -48,7 +48,7 @@ func New() *Registry {
 // worker.ErrInvalidCount when count is out of range.
 func (r *Registry) Create(
 	ctx context.Context,
-	agentID authz.AgentID,
+	agentID authn.AgentID,
 	count int,
 ) (worker.JobID, error) {
 	r.mutex.Lock()
@@ -90,7 +90,7 @@ func (r *Registry) Create(
 // A job owned by another agent is reported as not found, indistinguishably from
 // one that does not exist. Keep the two conflated: telling them apart would let
 // an agent probe for the existence of other agents' jobs.
-func (r *Registry) Find(agentID authz.AgentID, jobID worker.JobID) (*worker.Job, bool) {
+func (r *Registry) Find(agentID authn.AgentID, jobID worker.JobID) (*worker.Job, bool) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
