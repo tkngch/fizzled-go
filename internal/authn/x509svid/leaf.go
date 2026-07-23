@@ -1,9 +1,12 @@
 package x509svid
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/x509"
-	"errors"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/tkngch/fizzled-go/internal/authn/spiffeid"
 )
@@ -13,59 +16,6 @@ type Leaf struct {
 	spiffeID    spiffeid.ID
 	certificate *x509.Certificate
 }
-
-var (
-	// ErrNoCertificate indicates that no certificate is provided.
-	ErrNoCertificate = errors.New("no certificate")
-
-	// ErrLeafCertIsNotCA indicates that a leaf certificate has true in cA
-	// field.
-	ErrLeafCertIsNotCA = errors.New("leaf certificate is not CA")
-
-	// ErrLeafCertHasKeyCertSign indicates that a leaf certificate sets
-	// keyCertSign.
-	ErrLeafCertHasKeyCertSign = errors.New("leaf certificate has keyCertSign")
-
-	// ErrLeafCertHasCrlSign indicates that a leaf certificate sets cRLSign.
-	ErrLeafCertHasCrlSign = errors.New("leaf certificate has cRLSign")
-
-	// ErrLeafCertMissingDigitalSignature indicates that a leaf certificate is
-	// missing digitalSignature.
-	ErrLeafCertMissingDigitalSignature = errors.New("leaf certificate is missing digitalSignature")
-
-	// ErrLeafSpiffeMissingPath indicates that SPIFFE-ID in the leaf certificate
-	// has only a root path component.
-	ErrLeafSpiffeMissingPath = errors.New("leaf spiffe-ID is missing path components")
-
-	// ErrCertHasNoURI indicates that a certificate has no URI SAN and thus that
-	// SPIFFE ID cannot extracted.
-	ErrCertHasNoURI = errors.New("leaf certificate has no URI")
-
-	// ErrCertHasMultiplURIs indicates that a certificate has more than one URI
-	// SANs.
-	ErrCertHasMultiplURIs = errors.New("leaf certificate has multiple URIs")
-
-	// ErrSigningCertIsNotCA indicates that an intermediate or a root
-	// certificate does not have true in cA field.
-	ErrSigningCertIsNotCA = errors.New("signing certificate is not CA")
-
-	// ErrSigningCertMissingKeyCertSign indicates that an intermediate or a root
-	// certificate is missing keyCertSign.
-	ErrSigningCertMissingKeyCertSign = errors.New(
-		"signing certificate is missing keyCertSign",
-	)
-
-	// ErrSigningSpiffeHasPath indicates that an intermediate or a root
-	// certificate has an URI SAN with a non-root path component.
-	ErrSigningSpiffeHasPath = errors.New("signing certificate has path")
-
-	// ErrSigningSpiffeInDifferentTrustDomainThanLeaf indicates that an
-	// intermediate or a root certificate is in a different trust-domain than
-	// the leaf certificate.
-	ErrSigningSpiffeInDifferentTrustDomainThanLeaf = errors.New(
-		"signing spiffe-ID is in a different trust-domain than the leaf spiffe-ID",
-	)
-)
 
 // NewLeaf builds an ID from a parsed chain of certificates. The first entry in the
 // certificates is expected to be a leaf.
@@ -86,11 +36,39 @@ func NewLeaf(certificates []*x509.Certificate) (Leaf, error) {
 		return Leaf{}, fmt.Errorf("x509svid new: %w", err)
 	}
 
-	for _, signingCertificate := range certificates[1:] {
+	intermediateCertificatePool := x509.NewCertPool()
+	rootCertificatePool := x509.NewCertPool()
+
+	for idx, signingCertificate := range certificates[1:] {
 		err = validateSigningCertificate(signingCertificate, leafSpiffeID)
 		if err != nil {
 			return Leaf{}, fmt.Errorf("x509svid new: %w", err)
 		}
+
+		if idx == len(certificates)-2 {
+			// Add the last entry to the root certificate-pool
+			rootCertificatePool.AddCert(signingCertificate)
+		} else {
+			// Add the rest of entries to the intermediate certificate-pool
+			intermediateCertificatePool.AddCert(signingCertificate)
+		}
+	}
+
+	_, err = leafCertificate.Verify(
+		x509.VerifyOptions{
+			DNSName:       "", // Set this to empty to skip hostname verification.
+			Intermediates: intermediateCertificatePool,
+			Roots:         rootCertificatePool,
+			CurrentTime:   time.Now(),
+			KeyUsages: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageAny,
+			}, // Accept any key usage. Validate key usage elsewhere.
+			MaxConstraintComparisions: 0,            // Use the default value.
+			CertificatePolicies:       []x509.OID{}, // Accept any valid policy.
+		},
+	)
+	if err != nil {
+		return Leaf{}, fmt.Errorf("x509svid new: %w", err)
 	}
 
 	return Leaf{spiffeID: leafSpiffeID, certificate: leafCertificate}, nil
@@ -110,23 +88,37 @@ func (l Leaf) Certificate() *x509.Certificate {
 // https://github.com/spiffe/spiffe/blob/main/standards/X509-SVID.md
 func validatedLeafCertificate(leafCertificate *x509.Certificate) error {
 	if leafCertificate.IsCA {
-		return fmt.Errorf("verified spiffe-ID: %w", ErrLeafCertIsNotCA)
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafCertIsCA)
 	}
 
 	if leafCertificate.KeyUsage&x509.KeyUsageCertSign > 0 {
-		return fmt.Errorf("verified spiffe-ID: %w", ErrLeafCertHasKeyCertSign)
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafCertHasKeyCertSign)
 	}
 
 	if leafCertificate.KeyUsage&x509.KeyUsageCRLSign > 0 {
-		return fmt.Errorf("verified spiffe-ID: %w", ErrLeafCertHasCrlSign)
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafCertHasCrlSign)
 	}
 
 	if leafCertificate.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-		return fmt.Errorf("verified spiffe-ID: %w", ErrLeafCertMissingDigitalSignature)
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafCertMissingDigitalSignature)
 	}
 
-	// TO-DO: verify that Extended Key Usage (EKU) is included in the leaf, and
-	// that id-kp-serverAuth and id-kp-clientAuth are set.
+	if !slices.Contains(leafCertificate.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafCertMissingServerAuth)
+	}
+
+	if !slices.Contains(leafCertificate.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafCertMissingClientAuth)
+	}
+
+	publicKey, ok := leafCertificate.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafPublicKeyNotECDSA)
+	}
+
+	if publicKey.Curve != elliptic.P256() {
+		return fmt.Errorf("validated leaf certificate: %w", ErrLeafPublicKeyNotP256)
+	}
 
 	return nil
 }
@@ -161,18 +153,18 @@ func validateSigningCertificate(signingCertificate *x509.Certificate, leaf spiff
 
 	intermediate, err := spiffeID(signingCertificate)
 	if err != nil {
-		return fmt.Errorf("validate csigning-ertificate: %w", err)
+		return fmt.Errorf("validate signing-certificate: %w", err)
 	}
 
 	if leaf.TrustDomain() != intermediate.TrustDomain() {
 		return fmt.Errorf(
-			"validate csigning-ertificate: %w",
+			"validate signing-certificate: %w",
 			ErrSigningSpiffeInDifferentTrustDomainThanLeaf,
 		)
 	}
 
 	if len(intermediate.PathComponents()) > 0 {
-		return fmt.Errorf("validate csigning-ertificate: %w", ErrSigningSpiffeHasPath)
+		return fmt.Errorf("validate signing-certificate: %w", ErrSigningSpiffeHasPath)
 	}
 
 	return nil
@@ -184,7 +176,7 @@ func spiffeID(certificate *x509.Certificate) (spiffeid.ID, error) {
 	}
 
 	if len(certificate.URIs) > 1 {
-		return spiffeid.ID{}, fmt.Errorf("spiffeID: %w", ErrCertHasMultiplURIs)
+		return spiffeid.ID{}, fmt.Errorf("spiffeID: %w", ErrCertHasMultipleURIs)
 	}
 
 	spiffeID, err := spiffeid.New(certificate.URIs[0].String())

@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/url"
@@ -16,25 +18,84 @@ import (
 	"github.com/tkngch/fizzled-go/internal/authn/x509svid"
 )
 
+const trustDomain = "trustdomain.internal"
+
 func TestNewLeaf(t *testing.T) {
 	t.Parallel()
 
-	opts := certificateOptions{
-		uris:        []string{"spiffe://fizzled.internal/server"},
-		isCA:        false,
-		keyUsage:    x509.KeyUsageDigitalSignature,
-		extKeyUsage: []x509.ExtKeyUsage{},
-		curve:       nil,
-		notBefore:   time.Time{},
-		notAfter:    time.Time{},
+	testCases := []struct {
+		name       string
+		parentURIs []string
+	}{
+		{
+			name:       "no parent uri",
+			parentURIs: nil,
+		},
+		{
+			name:       "valid parent uri",
+			parentURIs: []string{"spiffe://" + trustDomain},
+		},
 	}
 
-	parent := newIssuer(t)
-	certificate, _ := newCertificate(t, &parent, opts)
+	for _, testCase := range testCases {
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-	_, err := x509svid.NewLeaf([]*x509.Certificate{certificate, parent.certificate})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+				parent := newIssuer(t, testCase.parentURIs)
+				opts := newCertificateOptions()
+				certificate := newCertificate(t, &parent, opts)
+
+				leaf, err := x509svid.NewLeaf([]*x509.Certificate{certificate, parent.certificate})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				if leaf.ID().String() != opts.uris[0] {
+					t.Errorf("expected [%s], got [%s]", opts.uris[0], leaf.ID().String())
+				}
+
+				if leaf.Certificate() != certificate {
+					t.Errorf("certificate mismatch")
+				}
+			},
+		)
+	}
+}
+
+func TestNewLeafError(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		issuerURIs    []string
+		options       certificateOptions
+		expectedError error
+	}{
+		{
+			name:          "parent is in a different trust-domain",
+			issuerURIs:    []string{"spiffe://another." + trustDomain},
+			options:       newCertificateOptions(),
+			expectedError: x509svid.ErrSigningSpiffeInDifferentTrustDomainThanLeaf,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				parent := newIssuer(t, testCase.issuerURIs)
+				certificate := newCertificate(t, &parent, testCase.options)
+
+				_, err := x509svid.NewLeaf([]*x509.Certificate{certificate, parent.certificate})
+				if !errors.Is(err, testCase.expectedError) {
+					t.Fatalf("expected [%v], got [%v]", testCase.expectedError, err)
+				}
+			},
+		)
 	}
 }
 
@@ -54,7 +115,7 @@ type certificateOptions struct {
 }
 
 // newIssuer generates a self-signed certificate authority (CA).
-func newIssuer(t *testing.T) issuer {
+func newIssuer(t *testing.T, uris []string) issuer {
 	t.Helper()
 
 	key := ecdsaPrivateKey(t, elliptic.P256())
@@ -66,6 +127,15 @@ func newIssuer(t *testing.T) issuer {
 	template.IsCA = true
 	template.BasicConstraintsValid = true
 	template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+
+	for _, raw := range uris {
+		uri, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse URI [%s]: %v", raw, err)
+		}
+
+		template.URIs = append(template.URIs, uri)
+	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
@@ -80,48 +150,43 @@ func newIssuer(t *testing.T) issuer {
 	return issuer{certificate, key}
 }
 
+func newCertificateOptions() certificateOptions {
+	return certificateOptions{
+		uris:        []string{fmt.Sprintf("spiffe://%s/path", trustDomain)},
+		isCA:        false,
+		keyUsage:    x509.KeyUsageDigitalSignature,
+		extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		curve:       elliptic.P256(),
+		notBefore:   time.Now().Add(-time.Hour),
+		notAfter:    time.Now().Add(time.Hour),
+	}
+}
+
 func newCertificate(
 	t *testing.T,
 	parent *issuer,
 	opts certificateOptions,
-) (*x509.Certificate, *ecdsa.PrivateKey) {
+) *x509.Certificate {
 	t.Helper()
 
-	key := ecdsaPrivateKey(t, opts.curve)
-
-	notBefore, notAfter := opts.notBefore, opts.notAfter
-	if notBefore.IsZero() {
-		notBefore = time.Now().Add(-time.Hour)
-	}
-
-	if notAfter.IsZero() {
-		notAfter = time.Now().Add(time.Hour)
-	}
-
-	uris := make([]*url.URL, 0, len(opts.uris))
-	for _, raw := range opts.uris {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatalf("parse URI SAN [%s]: %v", raw, err)
-		}
-
-		uris = append(uris, u)
-	}
-
-	eku := opts.extKeyUsage
-	if eku == nil {
-		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
-	}
-
 	template := newX509Certificate(t)
-	template.NotBefore = notBefore
-	template.NotAfter = notAfter
-	template.URIs = uris
+	template.NotBefore = opts.notBefore
+	template.NotAfter = opts.notAfter
 	template.IsCA = opts.isCA
 	template.BasicConstraintsValid = true
 	template.KeyUsage = opts.keyUsage
-	template.ExtKeyUsage = eku
+	template.ExtKeyUsage = opts.extKeyUsage
 
+	for _, raw := range opts.uris {
+		uri, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse URI [%s]: %v", raw, err)
+		}
+
+		template.URIs = append(template.URIs, uri)
+	}
+
+	key := ecdsaPrivateKey(t, opts.curve)
 	signerCert := template
 
 	var signerKey any = key
@@ -141,7 +206,7 @@ func newCertificate(
 		t.Fatalf("parse cert: %v", err)
 	}
 
-	return cert, key
+	return cert
 }
 
 func newX509Certificate(t *testing.T) *x509.Certificate {
@@ -230,10 +295,6 @@ func newX509Certificate(t *testing.T) *x509.Certificate {
 
 func ecdsaPrivateKey(t *testing.T, curve elliptic.Curve) *ecdsa.PrivateKey {
 	t.Helper()
-
-	if curve == nil {
-		curve = elliptic.P256()
-	}
 
 	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {

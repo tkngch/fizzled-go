@@ -49,6 +49,10 @@ func TestNew(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 
+				if sid.String() != testCase.input {
+					t.Errorf("expected [%s], got [%s]", testCase.input, sid.String())
+				}
+
 				if sid.TrustDomain() != testCase.expectedTrustDomain {
 					t.Errorf(
 						"expected [%s] trust-domain, got [%s]",

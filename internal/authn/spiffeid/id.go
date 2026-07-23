@@ -82,6 +82,10 @@ func (i ID) PathComponents() []string {
 	return i.pathComponents
 }
 
+func (i ID) String() string {
+	return i.uri
+}
+
 // validateTrustDomain validates that the authority string follows the SPIFFE standard:
 // https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE-ID.md#21-trust-domain
 func (i ID) validateTrustDomain() error {
