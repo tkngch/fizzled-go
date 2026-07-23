@@ -9,12 +9,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tkngch/fizzled-go/internal/authn"
 	"github.com/tkngch/fizzled-go/internal/authz"
 )
 
 const (
-	agentUser    = authz.AgentID("user")
-	agentNonUser = authz.AgentID("non-user")
+	agentUser    = authn.AgentID("user")
+	agentNonUser = authn.AgentID("non-user")
 )
 
 func TestAuthorize(t *testing.T) {
@@ -28,7 +29,7 @@ func TestAuthorize(t *testing.T) {
 	}
 
 	testCases := []struct {
-		agentID       authz.AgentID
+		agentID       authn.AgentID
 		action        authz.Action
 		expectedError error
 	}{
@@ -64,13 +65,13 @@ func TestLoad(t *testing.T) {
 	testCases := []struct {
 		name                string
 		json                json.RawMessage
-		expectedPermissions map[authz.AgentID][]authz.Action
+		expectedPermissions map[authn.AgentID][]authz.Action
 	}{
 		{
 			name: "one agent",
 			json: []byte(`{"user":"USER"}`),
-			expectedPermissions: map[authz.AgentID][]authz.Action{
-				authz.AgentID("user"): {
+			expectedPermissions: map[authn.AgentID][]authz.Action{
+				authn.AgentID("user"): {
 					authz.ActionStart,
 					authz.ActionStop,
 					authz.ActionGetStatus,
@@ -82,9 +83,9 @@ func TestLoad(t *testing.T) {
 			// The two agents that Secrets issues certificates for.
 			name: "two agents",
 			json: []byte(`{"smith":"USER","jones":"USER"}`),
-			expectedPermissions: map[authz.AgentID][]authz.Action{
-				authz.AgentID("smith"): {authz.ActionStart, authz.ActionStop},
-				authz.AgentID("jones"): {authz.ActionStart, authz.ActionStop},
+			expectedPermissions: map[authn.AgentID][]authz.Action{
+				authn.AgentID("smith"): {authz.ActionStart, authz.ActionStop},
+				authn.AgentID("jones"): {authz.ActionStart, authz.ActionStop},
 			},
 		},
 	}
@@ -153,22 +154,22 @@ func TestLoadRejects(t *testing.T) {
 		{
 			name:          "empty agent id",
 			json:          []byte(`{"":"USER"}`),
-			expectedError: authz.ErrInvalidAgentID,
+			expectedError: authn.ErrInvalidAgentID,
 		},
 		{
 			name:          "blank agent id",
 			json:          []byte(`{"  ":"USER"}`),
-			expectedError: authz.ErrInvalidAgentID,
+			expectedError: authn.ErrInvalidAgentID,
 		},
 		{
 			name:          "agent id with a slash",
 			json:          []byte(`{"a/b":"USER"}`),
-			expectedError: authz.ErrInvalidAgentID,
+			expectedError: authn.ErrInvalidAgentID,
 		},
 		{
 			name:          "agent id with dots",
 			json:          []byte(`{"../x":"USER"}`),
-			expectedError: authz.ErrInvalidAgentID,
+			expectedError: authn.ErrInvalidAgentID,
 		},
 	}
 
