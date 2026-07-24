@@ -17,11 +17,20 @@ type ID struct {
 const (
 	uriScheme       = "spiffe://"
 	uriSchemeLength = len(uriScheme)
+
+	// maxIDLength and maxTrustDomainLength are the SPIFFE-ID size limits: a
+	// SPIFFE ID is at most 2048 bytes, and a trust domain at most 255 bytes.
+	// https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE-ID.md#2-spiffe-identity
+	maxIDLength          = 2048
+	maxTrustDomainLength = 255
 )
 
 var (
 	// ErrNotSPIFFE indicates that id does not have spiffe scheme.
 	ErrNotSPIFFE = errors.New("not spiffe scheme")
+
+	// ErrIDTooLong indicates that the SPIFFE ID exceeds the maximum length.
+	ErrIDTooLong = errors.New("spiffe id too long")
 
 	// ErrInvalidTrustDomain indicates that the trust domain does not follow the
 	// SPIFFE standard.
@@ -39,6 +48,10 @@ var (
 func New(uri string) (ID, error) {
 	if !strings.HasPrefix(uri, uriScheme) {
 		return ID{}, fmt.Errorf("new spiffeid: %w", ErrNotSPIFFE)
+	}
+
+	if len(uri) > maxIDLength {
+		return ID{}, fmt.Errorf("new spiffeid: %w", ErrIDTooLong)
 	}
 
 	parts := strings.Split(uri[uriSchemeLength:], "/")
@@ -89,6 +102,14 @@ func (i ID) String() string {
 // validateTrustDomain validates that the authority string follows the SPIFFE standard:
 // https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE-ID.md#21-trust-domain
 func (i ID) validateTrustDomain() error {
+	if len(i.trustDomain) > maxTrustDomainLength {
+		return fmt.Errorf(
+			"validate authority: too long (%d bytes): %w",
+			len(i.trustDomain),
+			ErrInvalidTrustDomain,
+		)
+	}
+
 	if !validTrustDomainPattern.MatchString(i.trustDomain) {
 		return fmt.Errorf("validate authority [%s]: %w", i.trustDomain, ErrInvalidTrustDomain)
 	}

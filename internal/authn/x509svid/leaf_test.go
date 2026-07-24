@@ -237,6 +237,21 @@ func TestNewLeafChainError(t *testing.T) {
 		}
 	})
 
+	t.Run("leaf not yet valid beyond skew", func(t *testing.T) {
+		t.Parallel()
+
+		opts := newCertificateOptions()
+		opts.notBefore = time.Now().Add(time.Hour)
+		opts.notAfter = time.Now().Add(2 * time.Hour)
+
+		bundle, chain := signedLeaf(t, opts)
+
+		_, err := x509svid.NewLeaf(bundle, chain)
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	})
+
 	t.Run("signing cert is in a different trust-domain", func(t *testing.T) {
 		t.Parallel()
 
@@ -260,6 +275,20 @@ func TestNewLeafChainError(t *testing.T) {
 		_, err := x509svid.NewLeaf(bundle, chain)
 		if !errors.Is(err, x509svid.ErrSigningSpiffeHasPath) {
 			t.Fatalf("expected [%v], got [%v]", x509svid.ErrSigningSpiffeHasPath, err)
+		}
+	})
+
+	t.Run("signing cert has multiple URIs", func(t *testing.T) {
+		t.Parallel()
+
+		bundle, chain := signedByCA(t, []string{
+			"spiffe://" + trustDomain,
+			"spiffe://" + trustDomain + "/extra",
+		})
+
+		_, err := x509svid.NewLeaf(bundle, chain)
+		if !errors.Is(err, x509svid.ErrCertHasMultipleURIs) {
+			t.Fatalf("expected [%v], got [%v]", x509svid.ErrCertHasMultipleURIs, err)
 		}
 	})
 }

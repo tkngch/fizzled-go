@@ -36,6 +36,12 @@ func TestNew(t *testing.T) {
 			expectedTrustDomain:    "trustdomain",
 			expectedPathComponents: []string{"path", "subpath"},
 		},
+		{
+			name:                   "uppercase path component",
+			input:                  "spiffe://trustdomain/PathComponent",
+			expectedTrustDomain:    "trustdomain",
+			expectedPathComponents: []string{"PathComponent"},
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -140,6 +146,16 @@ func TestNewError(t *testing.T) {
 			name:          "invalid character in path",
 			input:         "spiffe://trustdomain/path/$/other",
 			expectedError: spiffeid.ErrInvalidPathComponent,
+		},
+		{
+			name:          "trust domain too long",
+			input:         "spiffe://" + strings.Repeat("a", 256),
+			expectedError: spiffeid.ErrInvalidTrustDomain,
+		},
+		{
+			name:          "spiffe id too long",
+			input:         "spiffe://trustdomain/" + strings.Repeat("a", 2048),
+			expectedError: spiffeid.ErrIDTooLong,
 		},
 	}
 

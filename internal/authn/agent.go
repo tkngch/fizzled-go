@@ -20,6 +20,18 @@ var ErrInvalidAgentID = errors.New("invalid agent id")
 // the hyphen, and the underscore.
 var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+// NewAgentID builds AgentID from string and validates it.
+func NewAgentID(input string) (AgentID, error) {
+	agentID := AgentID(input)
+
+	err := agentID.Validate()
+	if err != nil {
+		return "", fmt.Errorf("new agentID: %w", err)
+	}
+
+	return agentID, nil
+}
+
 // Validate returns an error if the identifier is not acceptable by the
 // authentication layer. An identifier is a single path component of a SPIFFE
 // ID, so it must not carry a separator or a relative modifier. Agent ID is
