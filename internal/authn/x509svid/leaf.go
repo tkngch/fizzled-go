@@ -49,7 +49,7 @@ func parse(rawCerts [][]byte) ([]*x509.Certificate, error) {
 	for idx, raw := range rawCerts {
 		certificate, err := x509.ParseCertificate(raw)
 		if err != nil {
-			return nil, fmt.Errorf("verify svid: parse certificate %d: %w", idx, err)
+			return nil, fmt.Errorf("parse certificate %d: %w", idx, err)
 		}
 
 		certificates[idx] = certificate

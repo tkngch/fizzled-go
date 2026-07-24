@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -64,7 +65,7 @@ func TestNewLeaf(t *testing.T) {
 					t.Fatalf("unexpected error in parsing a certificate: %v", err)
 				}
 
-				if leaf.Certificate() != expectedCertificate {
+				if !leaf.Certificate().Equal(expectedCertificate) {
 					t.Errorf("certificate mismatch")
 				}
 			},
@@ -77,15 +78,88 @@ func TestNewLeafError(t *testing.T) {
 
 	testCases := []struct {
 		name          string
-		issuerURIs    []string
-		options       certificateOptions
+		options       func(opts *certificateOptions)
 		expectedError error
 	}{
 		{
-			name:          "parent is in a different trust-domain",
-			issuerURIs:    []string{"spiffe://another." + trustDomain},
-			options:       newCertificateOptions(),
-			expectedError: x509svid.ErrSigningSpiffeInDifferentTrustDomainThanLeaf,
+			name: "leaf is a CA",
+			options: func(opts *certificateOptions) {
+				opts.isCA = true
+			},
+			expectedError: x509svid.ErrLeafCertIsCA,
+		},
+		{
+			name: "leaf may sign certificates",
+			options: func(opts *certificateOptions) {
+				opts.keyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign
+			},
+			expectedError: x509svid.ErrLeafCertHasKeyCertSign,
+		},
+		{
+			name: "leaf may sign CRLs",
+			options: func(opts *certificateOptions) {
+				opts.keyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign
+			},
+			expectedError: x509svid.ErrLeafCertHasCrlSign,
+		},
+		{
+			name: "leaf cannot sign digitally",
+			options: func(opts *certificateOptions) {
+				opts.keyUsage = x509.KeyUsageKeyEncipherment
+			},
+			expectedError: x509svid.ErrLeafCertMissingDigitalSignature,
+		},
+		{
+			name: "leaf is not for server authentication",
+			options: func(opts *certificateOptions) {
+				opts.extKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+			},
+			expectedError: x509svid.ErrLeafCertMissingServerAuth,
+		},
+		{
+			name: "leaf is not for client authentication",
+			options: func(opts *certificateOptions) {
+				opts.extKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+			},
+			expectedError: x509svid.ErrLeafCertMissingClientAuth,
+		},
+		{
+			name: "leaf key is not ECDSA",
+			options: func(opts *certificateOptions) {
+				opts.useRSA = true
+			},
+			expectedError: x509svid.ErrLeafPublicKeyNotECDSA,
+		},
+		{
+			name: "leaf key is not P-256",
+			options: func(opts *certificateOptions) {
+				opts.curve = elliptic.P384()
+			},
+			expectedError: x509svid.ErrLeafPublicKeyNotP256,
+		},
+		{
+			name: "leaf spiffe-ID has no path",
+			options: func(opts *certificateOptions) {
+				opts.uris = []string{"spiffe://" + trustDomain}
+			},
+			expectedError: x509svid.ErrLeafSpiffeMissingPath,
+		},
+		{
+			name: "leaf has no URI",
+			options: func(opts *certificateOptions) {
+				opts.uris = nil
+			},
+			expectedError: x509svid.ErrCertHasNoURI,
+		},
+		{
+			name: "leaf has multiple URIs",
+			options: func(opts *certificateOptions) {
+				opts.uris = []string{
+					"spiffe://" + trustDomain + "/a",
+					"spiffe://" + trustDomain + "/b",
+				}
+			},
+			expectedError: x509svid.ErrCertHasMultipleURIs,
 		},
 	}
 
@@ -95,19 +169,175 @@ func TestNewLeafError(t *testing.T) {
 			func(t *testing.T) {
 				t.Parallel()
 
-				parent := newIssuer(t, testCase.issuerURIs)
-				certificate := newCertificate(t, &parent, testCase.options)
+				opts := newCertificateOptions()
+				testCase.options(&opts)
 
-				bundle := x509.NewCertPool()
-				bundle.AddCert(parent.certificate)
+				bundle, chain := signedLeaf(t, opts)
 
-				_, err := x509svid.NewLeaf(bundle, [][]byte{certificate})
+				_, err := x509svid.NewLeaf(bundle, chain)
 				if !errors.Is(err, testCase.expectedError) {
 					t.Fatalf("expected [%v], got [%v]", testCase.expectedError, err)
 				}
 			},
 		)
 	}
+}
+
+// TestNewLeafChainError covers the chain-level failures whose setups do not fit
+// the single-leaf mutation table above.
+func TestNewLeafChainError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty chain", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := x509svid.NewLeaf(x509.NewCertPool(), [][]byte{})
+		if !errors.Is(err, x509svid.ErrNoCertificate) {
+			t.Fatalf("expected [%v], got [%v]", x509svid.ErrNoCertificate, err)
+		}
+	})
+
+	t.Run("malformed certificate", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := x509svid.NewLeaf(x509.NewCertPool(), [][]byte{[]byte("not a certificate")})
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	})
+
+	t.Run("chain does not anchor to the bundle", func(t *testing.T) {
+		t.Parallel()
+
+		signer := newIssuer(t, nil)
+		certificate := newCertificate(t, &signer, newCertificateOptions())
+
+		other := newIssuer(t, nil)
+		bundle := x509.NewCertPool()
+		bundle.AddCert(other.certificate)
+
+		_, err := x509svid.NewLeaf(bundle, [][]byte{certificate})
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	})
+
+	t.Run("leaf expired beyond skew", func(t *testing.T) {
+		t.Parallel()
+
+		opts := newCertificateOptions()
+		opts.notBefore = time.Now().Add(-2 * time.Hour)
+		opts.notAfter = time.Now().Add(-time.Hour)
+
+		bundle, chain := signedLeaf(t, opts)
+
+		_, err := x509svid.NewLeaf(bundle, chain)
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+	})
+
+	t.Run("signing cert is in a different trust-domain", func(t *testing.T) {
+		t.Parallel()
+
+		bundle, chain := signedByCA(t, []string{"spiffe://another." + trustDomain})
+
+		_, err := x509svid.NewLeaf(bundle, chain)
+		if !errors.Is(err, x509svid.ErrSigningSpiffeInDifferentTrustDomainThanLeaf) {
+			t.Fatalf(
+				"expected [%v], got [%v]",
+				x509svid.ErrSigningSpiffeInDifferentTrustDomainThanLeaf,
+				err,
+			)
+		}
+	})
+
+	t.Run("signing cert has a path", func(t *testing.T) {
+		t.Parallel()
+
+		bundle, chain := signedByCA(t, []string{"spiffe://" + trustDomain + "/path"})
+
+		_, err := x509svid.NewLeaf(bundle, chain)
+		if !errors.Is(err, x509svid.ErrSigningSpiffeHasPath) {
+			t.Fatalf("expected [%v], got [%v]", x509svid.ErrSigningSpiffeHasPath, err)
+		}
+	})
+}
+
+// TestNewLeafClockSkew asserts that a leaf whose validity boundary is within the
+// skew tolerance still verifies.
+func TestNewLeafClockSkew(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		notBefore time.Time
+		notAfter  time.Time
+	}{
+		{
+			name:      "not yet valid but within skew",
+			notBefore: time.Now().Add(time.Minute),
+			notAfter:  time.Now().Add(time.Hour),
+		},
+		{
+			name:      "recently expired but within skew",
+			notBefore: time.Now().Add(-time.Hour),
+			notAfter:  time.Now().Add(-time.Minute),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+
+				opts := newCertificateOptions()
+				opts.notBefore = testCase.notBefore
+				opts.notAfter = testCase.notAfter
+
+				bundle, chain := signedLeaf(t, opts)
+
+				leaf, err := x509svid.NewLeaf(bundle, chain)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				if leaf.ID().String() != opts.uris[0] {
+					t.Errorf("expected [%s], got [%s]", opts.uris[0], leaf.ID().String())
+				}
+			},
+		)
+	}
+}
+
+// signedLeaf issues a leaf described by opts, signed by a fresh CA, and returns
+// a bundle trusting that CA along with the presented single-certificate chain.
+func signedLeaf(t *testing.T, opts certificateOptions) (*x509.CertPool, [][]byte) {
+	t.Helper()
+
+	parent := newIssuer(t, nil)
+	certificate := newCertificate(t, &parent, opts)
+
+	bundle := x509.NewCertPool()
+	bundle.AddCert(parent.certificate)
+
+	return bundle, [][]byte{certificate}
+}
+
+// signedByCA issues a valid leaf signed by a CA carrying caURIs, and returns a
+// bundle trusting that CA together with a chain that also presents the CA, so
+// the signing-certificate checks run.
+func signedByCA(t *testing.T, caURIs []string) (*x509.CertPool, [][]byte) {
+	t.Helper()
+
+	parent := newIssuer(t, caURIs)
+	certificate := newCertificate(t, &parent, newCertificateOptions())
+
+	bundle := x509.NewCertPool()
+	bundle.AddCert(parent.certificate)
+
+	return bundle, [][]byte{certificate, parent.certificate.Raw}
 }
 
 type issuer struct {
@@ -121,6 +351,7 @@ type certificateOptions struct {
 	keyUsage    x509.KeyUsage
 	extKeyUsage []x509.ExtKeyUsage
 	curve       elliptic.Curve
+	useRSA      bool
 	notBefore   time.Time
 	notAfter    time.Time
 }
@@ -168,6 +399,7 @@ func newCertificateOptions() certificateOptions {
 		keyUsage:    x509.KeyUsageDigitalSignature,
 		extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		curve:       elliptic.P256(),
+		useRSA:      false,
 		notBefore:   time.Now().Add(-time.Hour),
 		notAfter:    time.Now().Add(time.Hour),
 	}
@@ -197,17 +429,26 @@ func newCertificate(
 		template.URIs = append(template.URIs, uri)
 	}
 
-	key := ecdsaPrivateKey(t, opts.curve)
-	signerCert := template
+	var publicKey, signerKey any
 
-	var signerKey any = key
+	if opts.useRSA {
+		key := rsaPrivateKey(t)
+		publicKey = &key.PublicKey
+		signerKey = key
+	} else {
+		key := ecdsaPrivateKey(t, opts.curve)
+		publicKey = &key.PublicKey
+		signerKey = key
+	}
+
+	signerCert := template
 
 	if parent != nil {
 		signerCert = parent.certificate
 		signerKey = parent.key
 	}
 
-	der, err := x509.CreateCertificate(rand.Reader, template, signerCert, &key.PublicKey, signerKey)
+	der, err := x509.CreateCertificate(rand.Reader, template, signerCert, publicKey, signerKey)
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
 	}
@@ -305,6 +546,19 @@ func ecdsaPrivateKey(t *testing.T, curve elliptic.Curve) *ecdsa.PrivateKey {
 	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		t.Fatalf("ecdsa generate key: %v", err)
+	}
+
+	return key
+}
+
+func rsaPrivateKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+
+	const bits = 2048
+
+	key, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		t.Fatalf("rsa generate key: %v", err)
 	}
 
 	return key

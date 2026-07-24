@@ -3,6 +3,7 @@ package authn
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -13,17 +14,27 @@ type AgentID string
 // character that it must not.
 var ErrInvalidAgentID = errors.New("invalid agent id")
 
+// validAgentIDPattern is deliberately stricter than a SPIFFE path component. An
+// AgentID is a single path component of a SPIFFE ID, but the fizzled domain
+// additionally forbids the dot, so an identifier is limited to alphanumerics,
+// the hyphen, and the underscore.
+var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // Validate returns an error if the identifier is not acceptable by the
-// authentication layer. The Authentication section of the README is where the
-// rule comes from: an identifier is a single path component of a SPIFFE ID, so
-// it should not carry a separator or a relative modifier.
+// authentication layer. An identifier is a single path component of a SPIFFE
+// ID, so it must not carry a separator or a relative modifier. Agent ID is
+// stricter than the SPIFFE standard: it also rejects the dot and any
+// whitespace.
 func (a AgentID) Validate() error {
 	if strings.TrimSpace(string(a)) == "" {
-		return fmt.Errorf("empty string: %w", ErrInvalidAgentID)
+		return fmt.Errorf("validate: empty string: %w", ErrInvalidAgentID)
 	}
 
-	if strings.ContainsAny(string(a), "/.") {
-		return fmt.Errorf("contains '/' or '.': %w", ErrInvalidAgentID)
+	if !validAgentIDPattern.MatchString(string(a)) {
+		return fmt.Errorf(
+			"validate: contains a character that is not allowed: %w",
+			ErrInvalidAgentID,
+		)
 	}
 
 	return nil

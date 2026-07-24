@@ -36,9 +36,39 @@ func TestValidate(t *testing.T) {
 			expectedOutput: authn.ErrInvalidAgentID,
 		},
 		{
-			name:           "agent id with dots",
-			input:          "../x",
+			name:           "whitespaces",
+			input:          " smith ",
 			expectedOutput: authn.ErrInvalidAgentID,
+		},
+		{
+			name:           "dot",
+			input:          "smith.jones",
+			expectedOutput: authn.ErrInvalidAgentID,
+		},
+		{
+			name:           "at-sign",
+			input:          "smith@agent",
+			expectedOutput: authn.ErrInvalidAgentID,
+		},
+		{
+			name:           "relative modifier",
+			input:          ".",
+			expectedOutput: authn.ErrInvalidAgentID,
+		},
+		{
+			name:           "parent modifier",
+			input:          "..",
+			expectedOutput: authn.ErrInvalidAgentID,
+		},
+		{
+			name:           "hyphen",
+			input:          "smith-jr",
+			expectedOutput: nil,
+		},
+		{
+			name:           "underscore",
+			input:          "smith_jr",
+			expectedOutput: nil,
 		},
 	}
 

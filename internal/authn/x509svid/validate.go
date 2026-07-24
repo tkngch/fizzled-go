@@ -14,25 +14,25 @@ import (
 // certificates is expected to be a leaf.
 func validate(certificates []*x509.Certificate) (Leaf, error) {
 	if len(certificates) == 0 {
-		return Leaf{}, fmt.Errorf("x509svid new: %w", ErrNoCertificate)
+		return Leaf{}, fmt.Errorf("validate: %w", ErrNoCertificate)
 	}
 
 	leafCertificate := certificates[0]
 
 	err := validatedLeafCertificate(leafCertificate)
 	if err != nil {
-		return Leaf{}, fmt.Errorf("x509svid new: %w", err)
+		return Leaf{}, fmt.Errorf("validate: %w", err)
 	}
 
 	leafSpiffeID, err := validatedLeafSpiffeID(leafCertificate)
 	if err != nil {
-		return Leaf{}, fmt.Errorf("x509svid new: %w", err)
+		return Leaf{}, fmt.Errorf("validate: %w", err)
 	}
 
 	for _, signingCertificate := range certificates[1:] {
 		err = validateSigningCertificate(signingCertificate, leafSpiffeID)
 		if err != nil {
-			return Leaf{}, fmt.Errorf("x509svid new: %w", err)
+			return Leaf{}, fmt.Errorf("validate: %w", err)
 		}
 	}
 
@@ -94,6 +94,10 @@ func validatedLeafSpiffeID(leafCertificate *x509.Certificate) (spiffeid.ID, erro
 // validateSigningCertificate compares the signing certificate against the standard:
 // https://github.com/spiffe/spiffe/blob/main/standards/X509-SVID.md
 func validateSigningCertificate(signingCertificate *x509.Certificate, leaf spiffeid.ID) error {
+	// The IsCA and KeyCertSign checks are defensive: verify (crypto/x509)
+	// already rejects a chain whose signing certificate is not a valid CA.
+	// verify, however, does not cover the URI-SAN checks below, so they are the
+	// ones that matter here.
 	if !signingCertificate.IsCA {
 		return fmt.Errorf("validate signing-certificate: %w", ErrSigningCertIsNotCA)
 	}
