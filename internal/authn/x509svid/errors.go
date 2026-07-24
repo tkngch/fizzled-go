@@ -40,11 +40,11 @@ var (
 
 	// ErrCertHasNoURI indicates that a certificate has no URI SAN and thus that
 	// SPIFFE ID cannot extracted.
-	ErrCertHasNoURI = errors.New("leaf certificate has no URI")
+	ErrCertHasNoURI = errors.New("certificate has no URI")
 
 	// ErrCertHasMultipleURIs indicates that a certificate has more than one URI
 	// SANs.
-	ErrCertHasMultipleURIs = errors.New("leaf certificate has multiple URIs")
+	ErrCertHasMultipleURIs = errors.New("certificate has multiple URIs")
 
 	// ErrSigningCertIsNotCA indicates that an intermediate or a root
 	// certificate does not have true in cA field.

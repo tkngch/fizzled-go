@@ -47,7 +47,10 @@ func TestNewLeaf(t *testing.T) {
 				opts := newCertificateOptions()
 				certificate := newCertificate(t, &parent, opts)
 
-				leaf, err := x509svid.NewLeaf([]*x509.Certificate{certificate, parent.certificate})
+				bundle := x509.NewCertPool()
+				bundle.AddCert(parent.certificate)
+
+				leaf, err := x509svid.NewLeaf(bundle, [][]byte{certificate})
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -56,7 +59,12 @@ func TestNewLeaf(t *testing.T) {
 					t.Errorf("expected [%s], got [%s]", opts.uris[0], leaf.ID().String())
 				}
 
-				if leaf.Certificate() != certificate {
+				expectedCertificate, err := x509.ParseCertificate(certificate)
+				if err != nil {
+					t.Fatalf("unexpected error in parsing a certificate: %v", err)
+				}
+
+				if leaf.Certificate() != expectedCertificate {
 					t.Errorf("certificate mismatch")
 				}
 			},
@@ -90,7 +98,10 @@ func TestNewLeafError(t *testing.T) {
 				parent := newIssuer(t, testCase.issuerURIs)
 				certificate := newCertificate(t, &parent, testCase.options)
 
-				_, err := x509svid.NewLeaf([]*x509.Certificate{certificate, parent.certificate})
+				bundle := x509.NewCertPool()
+				bundle.AddCert(parent.certificate)
+
+				_, err := x509svid.NewLeaf(bundle, [][]byte{certificate})
 				if !errors.Is(err, testCase.expectedError) {
 					t.Fatalf("expected [%v], got [%v]", testCase.expectedError, err)
 				}
@@ -166,7 +177,7 @@ func newCertificate(
 	t *testing.T,
 	parent *issuer,
 	opts certificateOptions,
-) *x509.Certificate {
+) []byte {
 	t.Helper()
 
 	template := newX509Certificate(t)
@@ -201,12 +212,7 @@ func newCertificate(
 		t.Fatalf("create cert: %v", err)
 	}
 
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parse cert: %v", err)
-	}
-
-	return cert
+	return der
 }
 
 func newX509Certificate(t *testing.T) *x509.Certificate {
