@@ -339,9 +339,9 @@ reads from.
 
 - Use an X.509-SVID certificate per agent, which encodes a SPIFFE ID in the SAN field.
 
-  - Use the server URI: `spiffe://countdown.internal/server`
+  - Use the server URI: `spiffe://fizzled.internal/server`
 
-  - Use the client URI: `spiffe://countdown.internal/client/agent/<agent identifier>`
+  - Use the client URI: `spiffe://fizzled.internal/client/agent/<agent identifier>`
 
   - Given that we do not have any authentication on top of mTLS (e.g., OIDC/JWT
     layer), encode agent identifier in the path.
@@ -354,7 +354,7 @@ reads from.
 
     - that the scheme is spiffe;
 
-    - that the authority is `countdown.internal`;
+    - that the trust domain is `fizzled.internal`;
 
     - that `serverAuth` is in the EKU; and
 
@@ -365,7 +365,7 @@ reads from.
 
     - that the scheme is spiffe;
 
-    - that the authority is `countdown.internal`;
+    - that the trust domain is `fizzled.internal`;
 
     - that `clientAuth` is in the EKU,
 
@@ -453,7 +453,7 @@ reads from.
 
 ### Secrets
 
-- Create one self-signed root CA for `countdown.internal`, to sign the server
+- Create one self-signed root CA for `fizzled.internal`, to sign the server
   and agent certificates.
 
   - Use 256-bit ECDSA.
@@ -461,7 +461,7 @@ reads from.
   - Mark the basic constraints extension as critical, set `cA` field to `true`
     and set `pathLenConstraint` to zero.
 
-  - Use `spiffe://countdown.internal` as URI SAN.
+  - Use `spiffe://fizzled.internal` as URI SAN.
 
   - Set a validity period (`notBefore` / `notAfter`) as a policy value: for
     example a few years. It should be long enough to outlive the leaf

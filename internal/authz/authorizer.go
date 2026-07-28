@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+
+	"github.com/tkngch/fizzled-go/internal/authn"
 )
 
 // ErrActionUnauthorized indicates that the user's role does not allow the
@@ -25,7 +27,7 @@ var ErrEmptyRoles = errors.New("empty roles")
 // An Authorizer is read-only once loaded, so one instance is safe for
 // concurrent use by any number of goroutines.
 type Authorizer struct {
-	roles map[AgentID]Role
+	roles map[authn.AgentID]Role
 }
 
 // Load reads the JSON file at path and constructs an Authorizer from it.
@@ -45,7 +47,7 @@ func Load(path string) (*Authorizer, error) {
 		return nil, fmt.Errorf("load [%s]: %w", path, err)
 	}
 
-	var entries map[AgentID]json.RawMessage
+	var entries map[authn.AgentID]json.RawMessage
 
 	err = json.Unmarshal(content, &entries)
 	if err != nil {
@@ -56,14 +58,14 @@ func Load(path string) (*Authorizer, error) {
 		return nil, fmt.Errorf("load [%s]: %w", path, ErrEmptyRoles)
 	}
 
-	roles := make(map[AgentID]Role, len(entries))
+	roles := make(map[authn.AgentID]Role, len(entries))
 
 	// Walk the identifiers in a fixed order. By default, ranging over the map
 	// would iterate entries in a random order.
 	for _, agentID := range slices.Sorted(maps.Keys(entries)) {
 		rawRole := entries[agentID]
 
-		err = agentID.validate()
+		err = agentID.Validate()
 		if err != nil {
 			return nil, fmt.Errorf("load [%s] agent [%s]: %w", path, agentID, err)
 		}
@@ -87,7 +89,7 @@ func Load(path string) (*Authorizer, error) {
 // recorded in the audit log. It is written for the operator reading that log,
 // not for the agent: a caller turning it into a gRPC status reports
 // PERMISSION_DENIED without echoing the message back to the agent.
-func (a *Authorizer) Authorize(agent AgentID, action Action) error {
+func (a *Authorizer) Authorize(agent authn.AgentID, action Action) error {
 	role, isFound := a.roles[agent]
 	if !isFound || !role.isAuthorizedTo(action) {
 		return fmt.Errorf(
