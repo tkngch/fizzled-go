@@ -99,14 +99,17 @@ func (j *Job) Status() Status {
 }
 
 // Stop requests cancellation of the job, blocks until the job finishes, and
-// reports whether that job actually stopped. It returns false if the job had
-// already completed or failed. Concurrent calls all observe the same results,
-// regardless of whether the call drives the cancellation.
-func (j *Job) Stop() bool {
+// returns the job's terminal status. It is StatusStopped when the cancellation
+// drove the job from running to stopped, and the status the job had already
+// reached otherwise, such as StatusCompleted when a natural completion won the
+// race. It is never StatusRunning, because the job has finished by the time
+// Stop returns. Concurrent calls all observe the same result, regardless of
+// whether the call drives the cancellation.
+func (j *Job) Stop() Status {
 	j.cancel()
 	<-j.finished
 
-	return j.Status() == StatusStopped
+	return j.Status()
 }
 
 // Ticks iterates over the job's ticks: the full sequence from the start, then

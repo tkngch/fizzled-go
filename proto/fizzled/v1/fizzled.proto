@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package fizzled.v1;
+
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/tkngch/fizzled-go/internal/gen/fizzled/v1;fizzledv1";
+
+// FizzledService runs stochastic countdown jobs. A caller is identified by the
+// SPIFFE identity in its certificate and may act only on the countdowns it
+// started. An RPC failure is reported as a gRPC status, never as a field on a
+// response.
+service FizzledService {
+  // Start starts a countdown and returns its job id. The countdown is
+  // registered before the id is returned, so it is queryable, streamable and
+  // stoppable the instant the caller receives the id.
+  rpc Start(StartRequest) returns (StartResponse);
+
+  // Stop requests cancellation of a running countdown. It is a no-op on a
+  // countdown that has already reached a terminal status.
+  rpc Stop(StopRequest) returns (StopResponse);
+
+  // GetStatus reports the current status of a countdown.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // StreamOutput replays every tick from the start of the countdown and then
+  // follows the live ticks. The stream closes once the terminal tick has been
+  // delivered, so no output is missed.
+  rpc StreamOutput(StreamOutputRequest) returns (stream StreamOutputResponse);
+}
+
+// StartRequest asks for a new countdown.
+message StartRequest {
+  // count is the initial count to fizzle down from. It is at least 1 and at
+  // most 100; any other value is rejected as an invalid argument.
+  int32 count = 1;
+}
+
+// StartResponse carries the id of the countdown that was started.
+message StartResponse {
+  // job_id identifies the countdown. It is ephemeral and is reused when the
+  // server restarts, so it is not stable across restarts.
+  string job_id = 1;
+}
+
+// StopRequest asks for a countdown to be cancelled.
+message StopRequest {
+  // job_id identifies the countdown to stop.
+  string job_id = 1;
+}
+
+// StopResponse reports what the cancellation request achieved.
+message StopResponse {
+  // status is the countdown's terminal status, once the cancellation request
+  // has resolved. It is STATUS_STOPPED only when the cancellation drove the
+  // countdown from running to stopped, and it is another terminal status when
+  // the countdown had already ended, for example when a natural completion won
+  // the race. It is never STATUS_RUNNING, because Stop resolves before it
+  // answers.
+  Status status = 1;
+}
+
+// GetStatusRequest asks for the status of a countdown.
+message GetStatusRequest {
+  // job_id identifies the countdown to query.
+  string job_id = 1;
+}
+
+// GetStatusResponse carries the status of a countdown.
+message GetStatusResponse {
+  // status is the countdown's status at the time of the query.
+  Status status = 1;
+}
+
+// StreamOutputRequest asks for the output of a countdown.
+message StreamOutputRequest {
+  // job_id identifies the countdown to stream.
+  string job_id = 1;
+}
+
+// StreamOutputResponse is one message of a countdown's output stream. It wraps
+// Tick so the stream can later carry something other than a tick without
+// disturbing Tick itself.
+message StreamOutputResponse {
+  // tick is the output that the countdown emitted.
+  Tick tick = 1;
+}
+
+// Tick is a single output from a fizzle job. Exactly one variant is set. A job
+// emits a progress on every countdown step, and its stream ends with exactly
+// one terminal tick: a progress whose remaining is zero, a stopped, or a
+// failure.
+message Tick {
+  // kind is the variant of this tick.
+  oneof kind {
+    // progress reports one step of the countdown.
+    Progress progress = 1;
+    // stopped reports that the job was stopped or canceled.
+    Stopped stopped = 2;
+    // failure reports that the job failed to complete.
+    Failure failure = 3;
+  }
+}
+
+// Progress is one step of a countdown.
+message Progress {
+  // elapsed records the time since the start of job.
+  google.protobuf.Duration elapsed = 1;
+  // remaining shows the remaining count of fizzle. A progress whose remaining
+  // is zero is the terminal tick of a job that ran to completion.
+  int32 remaining = 2;
+}
+
+// Stopped is the terminal tick of a job that was stopped or canceled. It
+// carries no fields: the cancelation cause is a server-side detail and is not
+// reported to the client.
+message Stopped {}
+
+// Failure is the terminal tick of a job that failed to complete.
+message Failure {
+  // message describes what went wrong. It is a fixed, generic description: the
+  // underlying cause is a server-side detail and is not reported to the client,
+  // just as Stopped withholds its cancelation cause. The cause is recorded in
+  // the server's log instead.
+  string message = 1;
+}
+
+// Status is the status of a fizzle job. A job starts as running and moves once
+// into one of the three terminal statuses, which it then keeps.
+enum Status {
+  // STATUS_UNSPECIFIED is the required zero value. The server never sends it,
+  // because a registered job always has a status.
+  STATUS_UNSPECIFIED = 0;
+  // STATUS_RUNNING means the job is counting down.
+  STATUS_RUNNING = 1;
+  // STATUS_COMPLETED means the job reached zero without an error or an
+  // interruption.
+  STATUS_COMPLETED = 2;
+  // STATUS_STOPPED means the job was stopped or canceled.
+  STATUS_STOPPED = 3;
+  // STATUS_FAILED means the job failed to complete.
+  STATUS_FAILED = 4;
+}

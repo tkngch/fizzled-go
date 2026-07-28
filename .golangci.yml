@@ -7,11 +7,30 @@ linters:
     - wsl  # deprecated
   settings:
     depguard:
+      # Two rules, because a file has to satisfy every rule it matches: the
+      # negations in `domain` are what actually confine the gRPC transport and
+      # the generated types to the service layer. Widening `domain`'s allow list
+      # instead would let any package reach for them.
       rules:
-        main:
+        domain:
+          files:
+            - $all
+            - "!**/internal/service/**"
+            - "!**/internal/gen/**"
           allow:
             - $gostd
             - github.com/tkngch/fizzled-go/internal/
+        service:
+          files:
+            - "**/internal/service/**"
+            # Generated files are already excluded by exclusions.generated, so
+            # this arm is belt and braces.
+            - "**/internal/gen/**"
+          allow:
+            - $gostd
+            - github.com/tkngch/fizzled-go/internal/
+            - google.golang.org/grpc
+            - google.golang.org/protobuf
     goconst:
       ignore-tests: true
   exclusions:
