@@ -508,32 +508,51 @@ reads from.
 
   - Do not set `keyEncipherment`, `keyAgreement`, `keyCertSign`, or `cRLSign`.
 
-- Store the certificates under `.secret` directory.
+- Store the certificates under `.secrets` directory.
 
-  - `.secret/ca.crt`: the root certificate.
+  - `.secrets/ca.crt`: the root certificate.
 
-  - `.secret/ca-private.key`: the root private key.
+  - `.secrets/ca-private.key`: the root private key.
 
-  - `.secret/server.crt`: the server certificate.
+  - `.secrets/server.crt`: the server certificate.
 
-  - `.secret/server-private.key`: the server private key.
+  - `.secrets/server-private.key`: the server private key.
 
-  - `.secret/agent-smith.crt`: the certificate for agent Smith.
+  - `.secrets/agent-smith.crt`: the certificate for agent Smith.
 
-  - `.secret/agent-smith-private.key`: the private key for agent Smith.
+  - `.secrets/agent-smith-private.key`: the private key for agent Smith.
 
-  - `.secret/agent-jones.crt`: the certificate for agent Jones.
+  - `.secrets/agent-jones.crt`: the certificate for agent Jones.
 
-  - `.secret/agent-jones-private.key`: the private key for agent Jones.
+  - `.secrets/agent-jones-private.key`: the private key for agent Jones.
 
-  - Do not commit `.secret` to git.
+  - Do not commit `.secrets` to git.
 
 ## Development
 
 - `make` runs the full check: regenerate the protos, format, vet, lint, and
   test. On top of the Go toolchain and golangci-lint, it needs
   [buf](https://buf.build/docs/installation) on the PATH, at the version the
-  makefile's `BUF_VERSION` pins.
+  makefile's `BUF_VERSION` pins. `make secrets` additionally needs
+  [openssl](https://openssl-library.org/source/) 1.1.1 or newer, for the `x509
+  -ext` option it reads each issued certificate back with. `make secrets` checks
+  for it and stops before it writes anything.
+
+- `make secrets` issues the local development PKI described in
+  [Secrets](#secrets): the root CA, and a leaf for the server and for each of
+  the two seeded agents. It writes them to `.secrets`, which is gitignored, with
+  the private keys readable by their owner alone.
+
+  - The target is not part of the default `make`, and it is not run in CI. The
+    PKI is local to a working copy: nothing is shared between developers, and
+    nothing is committed.
+
+  - A certificate within a day of expiry is reissued on the next `make secrets`,
+    as is one that has expired already or cannot be read. Make compares
+    timestamps rather than validity windows, so the makefile asks openssl
+    instead. Reissuing keeps the private key and rotates only the certificate; a
+    server already running holds the certificate it started with until it is
+    restarted.
 
 - The gRPC contract lives in `proto/fizzled/v1/fizzled.proto`, and the code
   generated from it is committed under `internal/gen/`. Run `make proto` after
