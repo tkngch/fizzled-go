@@ -5,9 +5,9 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/tkngch/fizzled-go/internal/authn/internal/testpki"
 	"github.com/tkngch/fizzled-go/internal/authn/spiffeid"
 	"github.com/tkngch/fizzled-go/internal/authn/x509svid"
+	"github.com/tkngch/fizzled-go/internal/testpki"
 )
 
 // FuzzVerifyLeafURI holds Verify to the properties the authentication layer

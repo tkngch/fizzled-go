@@ -137,15 +137,14 @@ The CLI program is called `fizzle`.
   race-free, so two concurrent first calls from a new agent do not each
   initialize it.
 
-- On server shutdown, (1) stop accepting new RPCs; (2) cancel all workers (see
-  [Worker](#worker)), each of which appends its stopped sentinel;
-  (3) let in-flight `StreamOutput` subscribers drain to that sentinel, bounded
-  by a short grace deadline; (4) close any streams still open past the deadline.
-  A subscriber that reaches its sentinel has already closed itself; only when
-  the grace deadline elapses does a client observe a transport-level cancel
-  instead of the sentinel. That bounded case is the one place shutdown may
-  deliver less than the normal-path guarantee, that every subscriber receives
-  the terminal sentinel before its stream closes.
+- On server shutdown, (1) cancel all workers (see [Worker](#worker)); (2) stop
+  accepting new RPCs; (3) let in-flight `StreamOutput` subscribers drain to that
+  sentinel; and (4) close any streams still open. Steps (1), (2) and (3) are
+  bounded by a grace deadline, and Step (4) applies only to the stream that is
+  open past the deadline. Therefore, only when the grace deadline elapses does a
+  client observe a transport-level cancel. That bounded case is the one place
+  shutdown may deliver less than the normal-path guarantee, that every
+  subscriber receives the terminal sentinel before its stream closes.
 
 - Accept `--server` flag (default: `localhost:8443`) to set the listen address.
 
@@ -253,8 +252,8 @@ job existence. `INVALID_ARGUMENT` applies only to `Start`'s `count` and
 - `Stop` and shutdown do not write status themselves. They cancel the worker in
   a best-effort basis, because the task may already be exiting via natural
   completion. A `Stop` racing natural completion resolves by which exit path the
-  worker takes: already at zero -> `COMPLETED` (`Stop` returns `false`); still
-  running -> cancellation drives `STOPPED` (`Stop` returns `true`).
+  worker takes: already at zero -> `COMPLETED` (`Stop` returns `COMPLETED`);
+  still running -> cancellation drives `STOPPED` (`Stop` returns `STOPPED`).
 
 - Because the job is registered in `RUNNING` before `Start` returns, no RPC ever
   observes a job that exists but has no status.
@@ -572,5 +571,5 @@ reads from.
   `fizzledv1` messages and the `worker` domain types; `internal/worker` and
   `internal/registry` reach for nothing beyond the standard library and each
   other, and the `depguard` rules in `.golangci.yml` are what keep them that
-  way: only `internal/service` may import `google.golang.org/grpc` and
+  way: only `internal/server` may import `google.golang.org/grpc` and
   `google.golang.org/protobuf`.

@@ -44,6 +44,7 @@ func TestNewJob(t *testing.T) {
 					jobID,
 					testCase.count,
 					testCase.meanInterval,
+					nil,
 				)
 				if testCase.expectedErr != nil {
 					if !errors.Is(err, testCase.expectedErr) {
@@ -74,7 +75,7 @@ func TestNewJob(t *testing.T) {
 func TestJobStop(t *testing.T) {
 	t.Parallel()
 
-	job, err := worker.NewJob(t.Context(), worker.JobID("test job stop"), 10, time.Minute)
+	job, err := worker.NewJob(t.Context(), worker.JobID("test job stop"), 10, time.Minute, nil)
 	if err != nil {
 		t.Fatalf("unexpected error from NewJob(): %s", err)
 	}
@@ -150,6 +151,7 @@ func TestJobTicksInterrupted(t *testing.T) {
 		worker.JobID("test job ticks interrupted"),
 		count,
 		time.Minute,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error from NewJob(): %s", err)
@@ -248,7 +250,7 @@ func assertProgressTicks(t *testing.T, ticks []worker.Tick, count int) {
 func mustNewJob(t *testing.T, jobID string, count int) *worker.Job {
 	t.Helper()
 
-	job, err := worker.NewJob(t.Context(), worker.JobID(jobID), count, time.Millisecond)
+	job, err := worker.NewJob(t.Context(), worker.JobID(jobID), count, time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("unexpected error from NewJob(): %s", err)
 	}

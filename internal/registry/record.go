@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
 
 	"github.com/tkngch/fizzled-go/internal/authn"
@@ -17,13 +18,15 @@ type record struct {
 	agentID authn.AgentID
 	counter int
 	jobs    map[worker.JobID]*worker.Job
+	logger  *slog.Logger
 }
 
-func newRecord(agentID authn.AgentID) *record {
+func newRecord(agentID authn.AgentID, logger *slog.Logger) *record {
 	return &record{
 		agentID: agentID,
 		counter: 0,
 		jobs:    make(map[worker.JobID]*worker.Job),
+		logger:  logger.With(slog.String("agent_id", string(agentID))),
 	}
 }
 
@@ -32,7 +35,7 @@ func newRecord(agentID authn.AgentID) *record {
 func (r *record) create(ctx context.Context, count int) (worker.JobID, error) {
 	jobID := worker.JobID(fmt.Sprintf("%s/%d", r.agentID, r.counter))
 
-	job, err := worker.NewJob(ctx, jobID, count, worker.MeanTickInterval)
+	job, err := worker.NewJob(ctx, jobID, count, worker.MeanTickInterval, r.logger)
 	if err != nil {
 		return "", fmt.Errorf("record-create [agent %s]: %w", r.agentID, err)
 	}

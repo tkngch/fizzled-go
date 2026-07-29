@@ -7,32 +7,41 @@ linters:
     - wsl  # deprecated
   settings:
     depguard:
-      # Two rules, because a file has to satisfy every rule it matches: the
-      # negations in `domain` are what actually confine the gRPC transport and
-      # the generated types to the service layer. Widening `domain`'s allow list
-      # instead would let any package reach for them.
       rules:
+        # domain should be independent of the transport protocol: protobuf and grpc.
         domain:
           files:
             - $all
-            - "!**/internal/service/**"
+            - "!**/internal/server/**"
             - "!**/internal/gen/**"
           allow:
             - $gostd
             - github.com/tkngch/fizzled-go/internal/
-        service:
+        # server is the boundary where the transport protocol is defined.
+        server:
           files:
-            - "**/internal/service/**"
-            # Generated files are already excluded by exclusions.generated, so
-            # this arm is belt and braces.
+            - "**/internal/server/**"
             - "**/internal/gen/**"
           allow:
             - $gostd
             - github.com/tkngch/fizzled-go/internal/
             - google.golang.org/grpc
             - google.golang.org/protobuf
+        # testpki is a test helper, which no production code may import.
+        testpki:
+          files:
+            - "!$test"
+          deny:
+            - pkg: github.com/tkngch/fizzled-go/internal/testpki
+              desc: testpki issues certificates for tests only
     goconst:
       ignore-tests: true
+    wrapcheck:
+      # Ignore errors from google.golang.org/grpc/status package, because
+      # wrapping rewrites the message the client receives.
+      extra-ignore-sigs:
+        - google.golang.org/grpc/status.Error
+        - google.golang.org/grpc/status.Errorf
   exclusions:
     rules:
       # funlen on tests makes it difficult to write table-driven tests.
