@@ -15,6 +15,7 @@ reaches zero. The service provides a gRPC API over mTLS.
   - [Authentication](#authentication) and [Authorization](#authorization)
   - [Audit and observability](#audit-and-observability)
   - [Secrets](#secrets)
+- [Development](#development)
 
 ## Motivation
 
@@ -35,12 +36,13 @@ API.
   and moves to `COMPLETED` when zero is reached, `STOPPED` when an
   agent stops it, or `FAILED` when the countdown exits for other reasons.
 
-- An agent can stream output of countdown. Each tick emits a string containing
-  the elapsed time in seconds and the remaining count. The stream replays all
-  outputs from the start of the countdown and then follows live outputs. When
-  the countdown reaches `COMPLETED`, `STOPPED`, or `FAILED` status, the stream
-  delivers the final output before closing, so no output is missed. Server
-  shutdown has one bounded exception (see [Server](#server)).
+- An agent can stream output of countdown. Each tick is a structured message
+  carrying either the progress of the countdown, as the elapsed time in seconds
+  and the remaining count, or the reason the countdown ended. The stream
+  replays all outputs from the start of the countdown and then follows live
+  outputs. When the countdown reaches `COMPLETED`, `STOPPED`, or `FAILED`
+  status, the stream delivers the final output before closing, so no output is
+  missed. Server shutdown has one bounded exception (see [Server](#server)).
 
 ### Non-Functional Requirements
 
@@ -86,20 +88,22 @@ The CLI program is called `fizzle`.
 - `fizzle start <count>`: starts the countdown and prints out the countdown's
   id in stdout.
 
-- `fizzle stop <id>`: requests a stop and exits 0 whether or not the countdown was
-  still running. A no-op on an already-terminal countdown still exits 0. The
-  `Stop` RPC's `true`/`false` result is not surfaced by the CLI. The exit-0
-  guarantee applies to a countdown the caller owns; a `NOT_FOUND` (unknown id, or
-  one owned by another agent) or any other RPC error exits 1.
+- `fizzle stop <id>`: requests a stop and exits 0 whether or not the countdown
+  was still running. A no-op on an already-terminal countdown still exits 0. The
+  terminal status that the `Stop` RPC returns is not surfaced by the CLI; use
+  `fizzle status` for that. The exit-0 guarantee applies to a countdown the
+  caller owns; a `NOT_FOUND` (unknown id, or one owned by another agent) or any
+  other RPC error exits 1.
 
 - `fizzle status <id>`: prints the status of the countdown
   (`RUNNING`/`COMPLETED`/`STOPPED`/`FAILED`) in stdout and exits 0. The terminal
   state is conveyed in stdout, not in the exit code.
 
-- `fizzle outputs <id>`: streams outputs of the countdown and prints each
-  message to stdout verbatim, including the terminal tick, the completion tick
-  `{"elapsed": <total>, "remaining": 0}` or an `{"error": ...}` tick.
-  Exits 0 when the server closes the stream cleanly, regardless of whether the
+- `fizzle outputs <id>`: streams outputs of the countdown and prints each tick
+  to stdout as one line of JSON, including the terminal tick: the completion
+  tick `{"progress": {"elapsed": <total>s, "remaining": 0}}`, a
+  `{"stopped": {}}` tick, or a `{"failure": {"message": ...}}` tick. Exits 0
+  when the server closes the stream cleanly, regardless of whether the
   countdown ended COMPLETED, STOPPED, or FAILED. The terminal state is conveyed
   in the streamed messages, not in the exit code.
 
@@ -134,7 +138,7 @@ The CLI program is called `fizzle`.
   initialize it.
 
 - On server shutdown, (1) stop accepting new RPCs; (2) cancel all workers (see
-  [Worker](#worker)), each of which appends its `{"error": "stopped"}` sentinel;
+  [Worker](#worker)), each of which appends its stopped sentinel;
   (3) let in-flight `StreamOutput` subscribers drain to that sentinel, bounded
   by a short grace deadline; (4) close any streams still open past the deadline.
   A subscriber that reaches its sentinel has already closed itself; only when
@@ -171,16 +175,19 @@ The CLI program is called `fizzle`.
   - Before returning the job-ID, atomically register the job: record its owner,
     set its status to RUNNING, and create its output buffer. The job is
     therefore queryable, streamable, and stoppable the instant the ID is
-    returned; the worker task then emits the initial tick `{"elapsed": 0.0,
-    "remaining": <count>}` and every tick after it.
+    returned; the worker task then emits the initial tick `{"progress":
+    {"elapsed": "0s", "remaining": <count>}}` and every tick after it.
 
 - `Stop(id)`: requests cancellation of the countdown's worker (see
   [Worker](#worker)); the worker performs the actual `RUNNING` -> `STOPPED`
-  transition. If a countdown is not RUNNING, this is a no-op. Returns `true` if
-  and only if the cancellation drove `RUNNING` -> `STOPPED`, and `false`
-  otherwise. So `false` is returned, for example, when the countdown had already
-  reached a terminal state (e.g., natural completion won the race). The `Stop`
-  RPC does not write status directly.
+  transition. If a countdown is not RUNNING, this is a no-op. Returns the
+  countdown's terminal status, once the cancellation request has resolved:
+  `STOPPED` if and only if the cancellation drove `RUNNING` -> `STOPPED`, and
+  otherwise the status the countdown had already reached (e.g., `COMPLETED`
+  when a natural completion won the race). Returning the status rather than a
+  bare "did it stop" bool costs nothing, because the worker has resolved by the
+  time `Stop` answers, and it tells the caller which way it lost the race. The
+  `Stop` RPC does not write status directly.
 
 - `GetStatus(id)`: returns status (RUNNING/COMPLETED/STOPPED/FAILED). The
   server keeps the mapping of job-ID to the status until it shuts down.
@@ -190,10 +197,10 @@ The CLI program is called `fizzle`.
   the client every minute, with a 10-second timeout.
 
   - The stream closes as soon as the subscriber has delivered the end-of-stream
-    sentinel to the client: the completion tick with `remaining == 0` or with an
-    `error` field. The worker appends exactly one such sentinel as the final
-    buffer entry (see [Worker](#worker)). The subscriber decides to close purely
-    from what it has sent and never consults the status map.
+    sentinel to the client: the completion tick with `remaining == 0`, or a
+    stopped or failure tick. The worker appends exactly one such sentinel as
+    the final buffer entry (see [Worker](#worker)). The subscriber decides to
+    close purely from what it has sent and never consults the status map.
 
   - A client that disconnects and reconnects gets a fresh replay from the start;
     there is no resume-from-cursor across connections.
@@ -240,7 +247,8 @@ job existence. `INVALID_ARGUMENT` applies only to `Start`'s `count` and
 - Invariant: the worker appends exactly one terminal sentinel to the output
   buffer, and it always matches the final status (see [Worker](#worker)). A
   subscriber can therefore never observe, say, a `remaining == 0` completion
-  tick on a job whose status is `STOPPED`.
+  tick on a job whose status is `STOPPED`; that job's final tick is a stopped
+  tick.
 
 - `Stop` and shutdown do not write status themselves. They cancel the worker in
   a best-effort basis, because the task may already be exiting via natural
@@ -254,15 +262,15 @@ job existence. `INVALID_ARGUMENT` applies only to `Start`'s `count` and
 ### Worker
 
 The worker is an in-process task per countdown. This worker executes a
-stochastic countdown and emits a string containing the elapsed time in seconds
-and the remaining count in JSON on every tick: for example, `{"elapsed": 12.3,
-"remaining": 3}`.
+stochastic countdown and emits a progress tick carrying the elapsed time in
+seconds and the remaining count on every tick: for example, `{"progress":
+{"elapsed": "12.300s", "remaining": 3}}`.
 
-- On start request, start the countdown in a new task and emit the first
-  tick `{"elapsed": 0.0, "remaining": <count>}`, where `<count>` is the input
-  argument. The required parameters for stochasticity (i.e., rate parameter for
-  exponential distribution) are fixed and hardcoded. Their exact values are
-  arbitrarily chosen.
+- On start request, start the countdown in a new task and emit the first tick
+  `{"progress": {"elapsed": "0s", "remaining": <count>}}`, where `<count>` is
+  the input argument. The required parameters for stochasticity (i.e., rate
+  parameter for exponential distribution) are fixed and hardcoded. Their exact
+  values are arbitrarily chosen.
 
 - On stop request, cancel the task. This is best-effort cancellation,
   because the task naturally exits when the count reaches zero.
@@ -272,22 +280,29 @@ and the remaining count in JSON on every tick: for example, `{"elapsed": 12.3,
 
 - When the worker task exits without an error, compare-and-set the status from
   `RUNNING` to `COMPLETED` (see [Job state machine](#job-state-machine)) and, as
-  part of that transition, append `{"elapsed": <total>, "remaining": 0}` where
-  `<total>` is the elapsed time since the countdown start in seconds.
+  part of that transition, append `{"progress": {"elapsed": "<total>s",
+  "remaining": 0}}` where `<total>` is the elapsed time since the countdown
+  start in seconds.
 
 - When the worker task exits with an error, compare-and-set the status from
   `RUNNING` to `FAILED` and, as part of that transition, append
-  `{"error": <error message>}`.
+  `{"failure": {"message": <fixed message>}}`. The message is a fixed, generic
+  description; the underlying error is a server-side detail and is not reported
+  to the client, just as the stopped tick withholds its cancelation cause. The
+  error itself is logged instead (see [Audit and
+  observability](#audit-and-observability)).
 
 - When the worker task is cancelled, compare-and-set the status from `RUNNING`
-  to `STOPPED` and, as part of that transition, append `{"error": "stopped"}`.
+  to `STOPPED` and, as part of that transition, append `{"stopped": {}}`. The
+  cancelation cause is a server-side detail and is not reported to the client.
 
 - The compare-and-set and its sentinel append are one unit, so the buffer's
   single terminal sentinel always matches the status (see
   [Job state machine](#job-state-machine)).
 
-- The tick with `remaining == 0` or an `error` field is the last entry ever
-  appended to its buffer. Subscribers close on delivering it (see [StreamOutput](#grpc-api)).
+- The progress tick with `remaining == 0`, or a stopped or failure tick, is the
+  last entry ever appended to its buffer. Subscribers close on delivering it
+  (see [StreamOutput](#grpc-api)).
 
 - Cancel all worker tasks when the server exits.
 
@@ -323,7 +338,7 @@ reads from.
   the client disconnecting. On disconnect, stop the subscriber so it stops
   reading the buffer; the job keeps no per-subscriber state to clean up. Server
   shutdown needs no separate wakeup path, because the worker appends the
-  `{"error": "stopped"}` sentinel, which wakes suspended subscribers (see
+  `{"stopped": {}}` sentinel, which wakes suspended subscribers (see
   [Worker](#worker) and the shutdown sequence under [Server](#server)).
 
 - Do not delete the buffer after the worker task exits and all subscribers stop
@@ -446,7 +461,9 @@ reads from.
     GetStatus / StreamOutput), the target job-ID, and allow/deny.
 
   - Job lifecycle transitions: RUNNING -> COMPLETED / STOPPED / FAILED, with the
-    job-ID and owning agent.
+    job-ID and owning agent. On a transition to FAILED, log the underlying
+    error too: the failure tick withholds it from the client (see
+    [Worker](#worker)), so the log is the only place it is recorded.
 
 - Never log secrets: no private keys and no full certificate PEM. Log at most the
   SPIFFE ID and/or the certificate serial number.
@@ -510,3 +527,31 @@ reads from.
   - `.secret/agent-jones-private.key`: the private key for agent Jones.
 
   - Do not commit `.secret` to git.
+
+## Development
+
+- `make` runs the full check: regenerate the protos, format, vet, lint, and
+  test. On top of the Go toolchain and golangci-lint, it needs
+  [buf](https://buf.build/docs/installation) on the PATH, at the version the
+  makefile's `BUF_VERSION` pins.
+
+- The gRPC contract lives in `proto/fizzled/v1/fizzled.proto`, and the code
+  generated from it is committed under `internal/gen/`. Run `make proto` after
+  every change to the proto and commit the regenerated files. CI regenerates and
+  fails when the result differs from what is committed, counting untracked and
+  deleted files as a difference too.
+
+  - The protoc plugins are pinned in `go.mod` through its `tool` directive, and
+    the buf version is pinned twice, in the makefile and in the CI workflow, so
+    generation is reproducible. `make proto` refuses to run against any other
+    buf, which is also what catches the two pins drifting apart.
+
+  - `buf breaking` runs on pull requests against `main`, so a change that breaks
+    the wire contract fails CI.
+
+- Keep the generated types at the edge. The service layer converts between
+  `fizzledv1` messages and the `worker` domain types; `internal/worker` and
+  `internal/registry` reach for nothing beyond the standard library and each
+  other, and the `depguard` rules in `.golangci.yml` are what keep them that
+  way: only `internal/service` may import `google.golang.org/grpc` and
+  `google.golang.org/protobuf`.

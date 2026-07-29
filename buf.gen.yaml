@@ -1,0 +1,11 @@
+version: v2
+# Delete the output directories before generating, so a renamed or removed
+# proto leaves no stale .pb.go behind.
+clean: true
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: internal/gen
+    opt: paths=source_relative
+  - local: ["go", "tool", "protoc-gen-go-grpc"]
+    out: internal/gen
+    opt: paths=source_relative

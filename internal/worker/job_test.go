@@ -79,18 +79,11 @@ func TestJobStop(t *testing.T) {
 		t.Fatalf("unexpected error from NewJob(): %s", err)
 	}
 
-	isStopped := job.Stop()
-	if !isStopped {
-		t.Errorf("expected true from job.Stop()")
-	}
-
+	assertJobStatus(t, worker.StatusStopped, job.Stop())
 	assertJobStatus(t, worker.StatusStopped, job.Status())
 
-	isStopped = job.Stop()
-	if !isStopped {
-		t.Errorf("expected true from job.Stop()")
-	}
-
+	// A second Stop is a no-op and reports the same terminal status.
+	assertJobStatus(t, worker.StatusStopped, job.Stop())
 	assertJobStatus(t, worker.StatusStopped, job.Status())
 
 	ticks := slices.Collect(job.Ticks(t.Context()))

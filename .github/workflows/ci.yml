@@ -22,9 +22,31 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # Full history, so `buf breaking` can resolve the main branch.
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+          # Pinned, so a buf release cannot reformat the protos out from under
+          # the drift check below. Must match BUF_VERSION in the makefile, which
+          # `make proto` asserts: a drift between the two pins fails right here.
+          version: 1.72.0
+      - run: make proto
+      - name: Check protos and generated code are up to date
+        # `git diff` alone ignores untracked files, so a newly generated file
+        # that was never committed would slip through. `make proto` reformats
+        # the protos as well as regenerating, so an unformatted .proto lands
+        # here too.
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "::error::Protos or generated code are out of date. Run 'make proto' and commit the result."
+            git status --porcelain --untracked-files=all
+            git diff
+            exit 1
+          fi
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
