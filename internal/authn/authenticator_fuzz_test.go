@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/tkngch/fizzled-go/internal/authn"
-	"github.com/tkngch/fizzled-go/internal/authn/internal/testpki"
+	"github.com/tkngch/fizzled-go/internal/testpki"
 )
 
 // pemBeginMarker opens a PEM block. Spelled out here because the tests read the

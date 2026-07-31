@@ -19,7 +19,7 @@ const (
 func TestRegistry(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	t.Cleanup(reg.Shutdown)
 
 	jobID, err := reg.Create(t.Context(), agentSmith, 10)
@@ -41,7 +41,7 @@ func TestRegistry(t *testing.T) {
 func TestRegistryContextCancel(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	t.Cleanup(reg.Shutdown)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -58,9 +58,24 @@ func TestRegistryContextCancel(t *testing.T) {
 
 	cancel()
 
-	if job.Status() != worker.StatusRunning {
+	// Range to the terminal tick rather than read the status straight after
+	// cancelling: the job has to be scheduled before it can react. Ticks
+	// is what waits for it, where Job.Stop would have stopped the job itself
+	// and proved nothing about the cancellation.
+	var last worker.Tick
+
+	for tick := range job.Ticks(t.Context()) {
+		last = tick
+	}
+
+	_, isStopped := last.(worker.Stopped)
+	if !isStopped {
+		t.Errorf("expected the stream to end on a stopped tick, got %#v", last)
+	}
+
+	if job.Status() != worker.StatusStopped {
 		t.Errorf(
-			"expected the job to be running after canceling the context, got %s",
+			"expected the job to be stopped by the cancellation, got %s",
 			job.Status(),
 		)
 	}
@@ -69,7 +84,7 @@ func TestRegistryContextCancel(t *testing.T) {
 func TestRegistryCreate(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	t.Cleanup(reg.Shutdown)
 
 	type created struct {
@@ -132,7 +147,7 @@ func TestRegistryCreateInvalidCount(t *testing.T) {
 			func(t *testing.T) {
 				t.Parallel()
 
-				reg := registry.New()
+				reg := registry.New(nil)
 				t.Cleanup(reg.Shutdown)
 
 				jobID, err := reg.Create(t.Context(), agentSmith, testCase.count)
@@ -151,7 +166,7 @@ func TestRegistryCreateInvalidCount(t *testing.T) {
 func TestRegistryFind(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	t.Cleanup(reg.Shutdown)
 
 	jobIDs := make(map[authn.AgentID]worker.JobID)
@@ -187,7 +202,7 @@ func TestRegistryFind(t *testing.T) {
 func TestRegistryShutdown(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	t.Cleanup(reg.Shutdown)
 
 	type created struct {
@@ -242,7 +257,7 @@ func TestRegistryShutdown(t *testing.T) {
 func TestRegistryShutdownStopsJobs(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	t.Cleanup(reg.Shutdown)
 
 	jobID := mustCreateJob(t, reg, agentSmith)
@@ -259,7 +274,7 @@ func TestRegistryShutdownStopsJobs(t *testing.T) {
 func TestRegistryCreateAfterShutdown(t *testing.T) {
 	t.Parallel()
 
-	reg := registry.New()
+	reg := registry.New(nil)
 	reg.Shutdown()
 
 	jobID, err := reg.Create(t.Context(), agentSmith, 10)

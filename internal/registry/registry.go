@@ -4,16 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 
 	"github.com/tkngch/fizzled-go/internal/authn"
+	"github.com/tkngch/fizzled-go/internal/logging"
 	"github.com/tkngch/fizzled-go/internal/worker"
 )
 
 // Registry keeps records of all jobs.
 type Registry struct {
 	records map[authn.AgentID]*record
+
+	logger *slog.Logger
 
 	// mutex guards records and isAcceptingJobs together, so Create's flag check
 	// and its job registration happen as one unit, and Shutdown can never
@@ -28,9 +32,15 @@ type Registry struct {
 var ErrNotAcceptingJobs = errors.New("not accepting jobs")
 
 // New creates a fresh Registry with no record.
-func New() *Registry {
+//
+// logger is handed to every job the Registry starts, which records its terminal
+// transition with it. A nil logger discards them.
+func New(logger *slog.Logger) *Registry {
+	logger = logging.OrDiscard(logger)
+
 	return &Registry{
 		records:         make(map[authn.AgentID]*record),
+		logger:          logger,
 		mutex:           sync.Mutex{},
 		isAcceptingJobs: true,
 	}
@@ -40,8 +50,8 @@ func New() *Registry {
 // it under a freshly minted JobID. The job is queryable and stoppable the
 // instant Create returns.
 //
-// ctx carries request-scoped values only. Create detaches it, so cancelling ctx
-// does not stop the job; only Job.Stop or Registry.Shutdown does.
+// ctx owns the job it starts: cancelling ctx stops the job, as Job.Stop and
+// Registry.Shutdown do.
 //
 // Create returns ErrNotAcceptingJobs once Shutdown has been called. It wraps
 // the job's validation errors, such that errors.Is reports
@@ -61,16 +71,12 @@ func (r *Registry) Create(
 		return "", fmt.Errorf("registry-create: %w", ErrNotAcceptingJobs)
 	}
 
-	// The Registry owns the job's lifetime, not ctx: cancelling ctx does not
-	// stop the job; only Job.Stop or Registry.Shutdown does.
-	jobCtx := context.WithoutCancel(ctx)
-
 	rec, isFound := r.records[agentID]
 	if !isFound {
-		rec = newRecord(agentID)
+		rec = newRecord(agentID, r.logger)
 	}
 
-	jobID, err := rec.create(jobCtx, count)
+	jobID, err := rec.create(ctx, count)
 	if err != nil {
 		return "", fmt.Errorf("registry-create: %w", err)
 	}

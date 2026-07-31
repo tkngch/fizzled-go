@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tkngch/fizzled-go/internal/authn/internal/testpki"
 	"github.com/tkngch/fizzled-go/internal/authn/spiffeid"
 	"github.com/tkngch/fizzled-go/internal/authn/x509svid"
+	"github.com/tkngch/fizzled-go/internal/testpki"
 )
 
 const trustDomain = "trustdomain.internal"

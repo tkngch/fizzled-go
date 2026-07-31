@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tkngch/fizzled-go/internal/authn/x509svid"
+	"github.com/tkngch/fizzled-go/internal/logging"
 )
 
 const (
@@ -59,10 +60,7 @@ func NewAuthenticator(caPath string, logger *slog.Logger) (*Authenticator, error
 		return nil, fmt.Errorf("new authenticator: %w", err)
 	}
 
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-
+	logger = logging.OrDiscard(logger)
 	authenticator := &Authenticator{verifier: verifier, logger: logger}
 	authenticator.auditTrustBundle(caPath, bundle)
 

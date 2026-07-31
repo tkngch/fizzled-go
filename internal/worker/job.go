@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"time"
+
+	"github.com/tkngch/fizzled-go/internal/logging"
 )
 
 // Job is a stochastic countdown job.
@@ -22,6 +25,8 @@ type Job struct {
 
 	changed  chan struct{}
 	finished chan struct{}
+
+	logger *slog.Logger
 
 	// mutex guards status and ticks together, so a terminal transition and
 	// its sentinel append happen atomically as one unit.
@@ -49,11 +54,15 @@ var (
 // NewJob starts a job with RUNNING status. It returns an error when count is
 // zero or negative or very large, or when the mean tick interval is zero or
 // negative.
+//
+// logger records the job's one terminal transition, with the underlying error
+// when the job failed. A nil logger discards it.
 func NewJob(
 	ctx context.Context,
 	jobID JobID,
 	count int,
 	meanTickInterval time.Duration,
+	logger *slog.Logger,
 ) (*Job, error) {
 	if count <= 0 || count > MaxCount {
 		return nil, fmt.Errorf("new-job [count %d]: %w", count, ErrInvalidCount)
@@ -77,6 +86,7 @@ func NewJob(
 		cancel:           jobCancel,
 		changed:          make(chan struct{}),
 		finished:         make(chan struct{}),
+		logger:           logging.OrDiscard(logger),
 		mutex:            sync.Mutex{},
 	}
 
@@ -166,9 +176,9 @@ func (j *Job) countdown(ctx context.Context, count int) {
 		case nil:
 			return
 		case error:
-			j.finish(StatusFailed, PanicError{fmt.Errorf("%w: %w", recovered, ErrJobPanic)})
+			j.finish(ctx, StatusFailed, PanicError{fmt.Errorf("%w: %w", recovered, ErrJobPanic)})
 		default:
-			j.finish(StatusFailed, PanicError{fmt.Errorf("%v: %w", recovered, ErrJobPanic)})
+			j.finish(ctx, StatusFailed, PanicError{fmt.Errorf("%v: %w", recovered, ErrJobPanic)})
 		}
 	}()
 
@@ -191,7 +201,7 @@ func (j *Job) countdown(ctx context.Context, count int) {
 				Remaining: currentCount,
 			}
 			if tick.IsTerminal() {
-				j.finish(StatusCompleted, tick)
+				j.finish(ctx, StatusCompleted, tick)
 
 				return
 			}
@@ -199,7 +209,7 @@ func (j *Job) countdown(ctx context.Context, count int) {
 			j.reportProgress(tick)
 
 		case <-ctx.Done():
-			j.finish(StatusStopped, Stopped{Cause: ctx.Err()})
+			j.finish(ctx, StatusStopped, Stopped{Cause: ctx.Err()})
 
 			return
 		}
@@ -218,17 +228,63 @@ func (j *Job) reportProgress(tick Progress) {
 	}
 }
 
-// finish performs two actions under a single lock: the compare-and-set from
-// RUNNING status, and the appending to the ticks.
-func (j *Job) finish(terminalStatus Status, lastTick Tick) {
+// finish moves the job to its terminal status and records the move. Only the
+// call that wins the transition records it, so a job's end is logged exactly
+// once however many triggers reach it.
+func (j *Job) finish(ctx context.Context, terminalStatus Status, lastTick Tick) {
+	if !j.setTerminal(terminalStatus, lastTick) {
+		return
+	}
+
+	j.auditTransition(ctx, terminalStatus, lastTick)
+}
+
+// setTerminal performs two actions under a single lock: the compare-and-set
+// from RUNNING status, and the appending to the ticks. It reports whether this
+// call is the one that performed the transition.
+func (j *Job) setTerminal(terminalStatus Status, lastTick Tick) bool {
 	j.mutex.Lock()
 	defer j.mutex.Unlock()
 
-	if j.status == StatusRunning {
-		j.status = terminalStatus
-		j.ticks = append(j.ticks, lastTick)
-		close(j.changed)
-		// Do not re-create j.changed channel, because no change is expected
-		// after the job finishes.
+	if j.status != StatusRunning {
+		return false
 	}
+
+	j.status = terminalStatus
+	j.ticks = append(j.ticks, lastTick)
+	close(j.changed)
+	// Do not re-create j.changed channel, because no change is expected after
+	// the job finishes.
+
+	return true
+}
+
+// auditTransition records the job's one transition out of RUNNING.
+//
+// It is written here, where the transition happens, rather than where a tick is
+// delivered: a job that no subscriber is streaming fails just the same, and one
+// with two subscribers still fails only once. A failure's cause is withheld
+// from the client, so this line is the only place it is recorded.
+func (j *Job) auditTransition(ctx context.Context, terminalStatus Status, lastTick Tick) {
+	attributes := []slog.Attr{
+		slog.String("job_id", string(j.id)),
+		slog.String("status", string(terminalStatus)),
+	}
+
+	level := slog.LevelInfo
+	if terminalStatus == StatusFailed {
+		level = slog.LevelError
+	}
+
+	// The cause, when the tick carries one. It is withheld from the client, so
+	// this attribute is the only place it is recorded.
+	failure, isFailure := lastTick.(PanicError)
+	if isFailure {
+		attributes = append(attributes, slog.String("error", failure.Error()))
+	}
+
+	// WithoutCancel, because a job stopped by cancellation would otherwise
+	// record its own end through the context that ended it, and a handler is
+	// free to drop a record whose context is already done.
+	j.logger.LogAttrs(context.WithoutCancel(ctx), level, "job finished", attributes...)
 }
