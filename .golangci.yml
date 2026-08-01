@@ -12,14 +12,17 @@ linters:
         domain:
           files:
             - $all
+            - "!**/internal/client/**"
             - "!**/internal/server/**"
             - "!**/internal/gen/**"
           allow:
             - $gostd
             - github.com/tkngch/fizzled-go/internal/
-        # server is the boundary where the transport protocol is defined.
-        server:
+        # client and server are the two sides of the boundary where the transport
+        # protocol is defined.
+        transport:
           files:
+            - "**/internal/client/**"
             - "**/internal/server/**"
             - "**/internal/gen/**"
           allow:

@@ -358,7 +358,7 @@ func newInterceptor(
 		tb.Fatalf("new authenticator: %v", err)
 	}
 
-	authorizer, err := authz.Load(writeRoles(tb, agents...))
+	authorizer, err := authz.Load(testpki.WriteRoles(tb, agents...))
 	if err != nil {
 		tb.Fatalf("load roles: %v", err)
 	}

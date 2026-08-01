@@ -2,14 +2,10 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/tkngch/fizzled-go/internal/authn"
-	"github.com/tkngch/fizzled-go/internal/authz"
 	fizzledv1 "github.com/tkngch/fizzled-go/internal/gen/fizzled/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -48,31 +44,6 @@ func assertErrorCode(tb testing.TB, err error, expected codes.Code) {
 	if found.Code() != expected {
 		tb.Errorf("expected %s, got %s [%s]", expected, found.Code(), found.Message())
 	}
-}
-
-// writeRoles writes a roles file granting USER to each of agents, and returns
-// its path.
-func writeRoles(tb testing.TB, agents ...authn.AgentID) string {
-	tb.Helper()
-
-	roles := make(map[string]string, len(agents))
-	for _, agent := range agents {
-		roles[string(agent)] = string(authz.RoleUser)
-	}
-
-	encoded, err := json.Marshal(roles)
-	if err != nil {
-		tb.Fatalf("marshal roles: %v", err)
-	}
-
-	path := filepath.Join(tb.TempDir(), "roles.json")
-
-	err = os.WriteFile(path, encoded, 0o600)
-	if err != nil {
-		tb.Fatalf("write roles [%s]: %v", path, err)
-	}
-
-	return path
 }
 
 // recordingStream collects what a streaming handler sends, standing in for the

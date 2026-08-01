@@ -3,9 +3,9 @@
 // signs.
 //
 // This package provides the common plumbing (keys, templates, signing, PEM
-// files) for the tests of authn, of x509svid, and of server. Each package is
-// expected to provide the fizzled identities or the SPIFFE shapes, to suite
-// individual tests.
+// files) for the tests of authn, of x509svid, of server, and of client. Each
+// package is expected to provide the fizzled identities or the SPIFFE shapes,
+// to suite individual tests.
 //
 // Every constructor takes a testing.TB and fails the test rather than returning
 // an error: a certificate that cannot be issued is a broken test, not a case

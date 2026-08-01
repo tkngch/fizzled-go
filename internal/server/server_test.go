@@ -300,7 +300,7 @@ func newConfig(
 		CAPath:        caPath,
 		CertPath:      certPath,
 		KeyPath:       keyPath,
-		RolesPath:     writeRoles(tb, agents...),
+		RolesPath:     testpki.WriteRoles(tb, agents...),
 		ShutdownGrace: 0,
 	}
 }
