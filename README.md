@@ -113,10 +113,10 @@ The CLI program is called `fizzle`.
 
 - Accept `--server` flag (default: `localhost:8443`) to set the dial address.
 
-- Accept `--cert` flag for the path to the certificate file (required; the client
-  must present its own identity, so there is no default).
+- Accept `--cert` flag for the path to the certificate file, with a reasonable
+  default.
 
-- Accept `--key` flag for the path to the private key (required).
+- Accept `--key` flag for the path to the private key, with a reasonable default.
 
 - Accept `--ca` flag for the path to the trust bundle, with a reasonable
   default. Verify server SVID with this trust bundle.
@@ -525,6 +525,9 @@ reads from.
 
   - `.secrets/agent-jones-private.key`: the private key for agent Jones.
 
+  - `.secrets/roles.json`: the agent-to-role mapping that grants `USER` to both
+    seeded agents.
+
   - Do not commit `.secrets` to git.
 
 ## Development
@@ -536,6 +539,8 @@ reads from.
   [openssl](https://openssl-library.org/source/) 1.1.1 or newer, for the `x509
   -ext` option it reads each issued certificate back with. `make secrets` checks
   for it and stops before it writes anything.
+
+- `make build` compiles both binaries into `bin/`, which is gitignored.
 
 - `make secrets` issues the local development PKI described in
   [Secrets](#secrets): the root CA, and a leaf for the server and for each of

@@ -27,6 +27,10 @@ fuzz:
 	go test -run '^$$' -fuzz FuzzTrustBundle -fuzztime 30s ./internal/authn/
 	go test -run '^$$' -fuzz FuzzVerifyLeafURI -fuzztime 30s ./internal/authn/x509svid/
 
+.PHONY: build
+build:
+	go build -o bin/ ./cmd/...
+
 # The protoc plugins are pinned in go.mod through its `tool` directive, so this
 # is the only unpinned input left to generation. Must match the buf version in
 # .github/workflows/ci.yml.
@@ -52,7 +56,8 @@ proto:
 secrets: .secrets/ca.crt \
 	.secrets/server.crt .secrets/server-private.key \
 	.secrets/agent-smith.crt .secrets/agent-smith-private.key \
-	.secrets/agent-jones.crt .secrets/agent-jones-private.key
+	.secrets/agent-jones.crt .secrets/agent-jones-private.key \
+	.secrets/roles.json
 
 .PHONY: clean-secrets
 clean-secrets:
@@ -157,3 +162,7 @@ check-openssl:
 	openssl verify -CAfile $(filter %/ca.crt,$^) $@
 	openssl x509 -in $@ -noout \
 		-ext basicConstraints,keyUsage,extendedKeyUsage,subjectAltName
+
+.secrets/roles.json: | .secrets
+	@printf '%s\n' '{"jones":"USER","smith":"USER"}' > $@
+
