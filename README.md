@@ -571,5 +571,5 @@ reads from.
   `fizzledv1` messages and the `worker` domain types; `internal/worker` and
   `internal/registry` reach for nothing beyond the standard library and each
   other, and the `depguard` rules in `.golangci.yml` are what keep them that
-  way: only `internal/server` may import `google.golang.org/grpc` and
-  `google.golang.org/protobuf`.
+  way: only `internal/server` and `internal/client` may import
+  `google.golang.org/grpc` and `google.golang.org/protobuf`.
