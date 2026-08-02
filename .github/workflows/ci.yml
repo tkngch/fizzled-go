@@ -47,6 +47,14 @@ jobs:
             git diff
             exit 1
           fi
+      - name: buf breaking
+        # Pull requests only: on a push to main the comparison is main against
+        # itself.
+        if: github.event_name == 'pull_request'
+        # origin/main, not main: the checkout fetches heads into
+        # refs/remotes/origin/* and leaves HEAD detached at the PR merge commit,
+        # so no local main ref exists for buf to resolve.
+        run: buf breaking --against '.git#branch=origin/main'
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
