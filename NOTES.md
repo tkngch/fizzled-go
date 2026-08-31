@@ -20,11 +20,12 @@ on the branch `main`.
 8. [How the server authenticates the client](#how-the-server-authenticates-the-client)
 9. [Session resumption](#session-resumption)
 10. [The protection after the handshake](#the-protection-after-the-handshake)
-11. [From the identity to the authorization](#from-the-identity-to-the-authorization)
+11. [The identity at each RPC](#the-identity-at-each-rpc)
 12. [The audit record](#the-audit-record)
 13. [The certificate lifecycle](#the-certificate-lifecycle)
 14. [The limits of this design](#the-limits-of-this-design)
 15. [Where the code is](#where-the-code-is)
+16. [Summary](#summary)
 
 ## What mTLS gives
 
@@ -46,8 +47,7 @@ needs no password and no token. The certificate is the credential
 
 mTLS does not give authorization. It tells the server *who* the caller is. It
 does not tell the server *what* the caller can do. This project keeps the two
-apart. See [From the identity to the
-authorization](#from-the-identity-to-the-authorization).
+apart. This document describes the authentication only.
 
 ## The parts that exist before a connection
 
@@ -109,7 +109,8 @@ is the one file `.secrets/ca.crt`. Both the server and the client read it
 ([`cmd/fizzled/flags.go:12-19`], [`cmd/fizzle/flags.go:12-17`]).
 
 The bundle is the most important input. If a person can add a root to it, that
-person can make a certificate for any identity. Thus the parser is strict.
+person can issue a certificate for any identity, and this process accepts it.
+Thus the parser is strict.
 
 The function `loadTrustBundle` ([`trustbundle.go:41-53`]) reads the file. The
 function `parseTrustBundle` ([`trustbundle.go:59-121`]) reads the content one
@@ -179,8 +180,12 @@ an `AgentID` are stricter than the rules for a SPIFFE path component
 
 The handshake does two different tasks at the same time. Do not confuse them:
 
-1. **The key agreement.** The two sides make a shared secret with Elliptic Curve
-   Diffie-Hellman Ephemeral (ECDHE). The session keys come from this secret.
+1. **The key agreement.** The two sides make an ephemeral shared secret. The
+   session keys come from this secret. The configuration selects no group, so Go
+   selects its default. For TLS 1.3, the default is the hybrid group
+   X25519MLKEM768. For TLS 1.2, the two permitted cipher suites use Elliptic
+   Curve Diffie-Hellman Ephemeral (ECDHE) ([`tlsconfig.go:45-48`]). Each group
+   gives a new secret for each connection.
 2. **The authentication.** Each side signs the transcript with its private key.
    This signature connects the identity in the certificate to the key
    agreement above.
@@ -197,8 +202,8 @@ This is the TLS 1.3 sequence. The project permits TLS 1.2 and TLS 1.3, but no
 version before them ([`tlsconfig.go:43-44`]):
 
 ```
-client → ClientHello          versions, cipher suites, ECDHE key share
-server → ServerHello          chosen version + suite, ECDHE key share
+client → ClientHello          versions, cipher suites, key share
+server → ServerHello          chosen version + suite, key share
                               ── the messages below are encrypted ──
 server → CertificateRequest   ← the server requests a client certificate
 server → Certificate          server.crt
@@ -223,8 +228,8 @@ This is the content of the file `agent-smith.crt`. This data is public. It
 contains the public key of the agent, the SPIFFE ID, the validity period, and
 the signature of the CA. A person who can read the file can copy the file. On a
 TLS 1.2 connection, a person who monitors the network can also see the
-certificate. The certificate alone is not proof of identity. It is a statement,
-and not a credential.
+certificate. The certificate alone is not proof of identity. It is only a
+statement. The proof comes with the next message.
 
 The chain contains one certificate. The command `openssl x509 -req` writes only
 the leaf certificate into `agent-smith.crt`. The function `tls.LoadX509KeyPair`
@@ -268,16 +273,17 @@ func newClientTLSConfig(identity tls.Certificate, verify func(tls.ConnectionStat
 }
 ```
 
-The related configuration has `RootCAs: nil`, `ServerName: ""` and
-`VerifyPeerCertificate: nil` ([`tlsconfig.go:61-64`]). These settings stop all
-the Go verification of the server.
+The field `InsecureSkipVerify` stops the Go verification of the server. The
+other verification fields stay empty: `VerifyPeerCertificate: nil`, `RootCAs:
+nil`, and `ServerName: ""` ([`tlsconfig.go:60-63`]). Thus Go applies no check to
+the server certificate.
 
-The empty subject is the reason. The Go verification asks this question: is this
-certificate valid for the hostname? It compares `ServerName` with the DNS SANs
-of the certificate. The server SVID (SPIFFE Verifiable Identity Document) has no
-DNS SAN. Thus this comparison has no data, and it rejects each connection. The
-identity of the server is not `localhost`. The identity is
-`spiffe://fizzled.internal/server`.
+The missing DNS SAN is the reason. The Go verification asks this question: is
+this certificate valid for the hostname? It compares `ServerName` with the DNS
+SANs of the certificate. Go ignores the common name here. The server SVID
+(SPIFFE Verifiable Identity Document) has no DNS SAN. Thus this comparison has
+no data, and it rejects each connection. The identity of the server is not
+`localhost`. The identity is `spiffe://fizzled.internal/server`.
 
 Thus `InsecureSkipVerify = true` does not mean *no verification*. It means *no
 Go verification*. The same function installs a replacement (comment at
@@ -302,9 +308,9 @@ _, err := leaf.Verify(x509.VerifyOptions{
 The verifier rejects a pool that is nil ([`verifier.go:102-104`]). Thus the
 verifier does not use the system trust store of the host. The function
 `clampToValidity` ([`verifier.go:140-149`]) applies a clock-skew tolerance of
-two minutes. It moves the test time to the edge of the validity period, but not
-more than two minutes. Thus a small difference between the two clocks does not
-cause a failure.
+two minutes ([`authenticator.go:19-22`]). It moves the test time to the edge of
+the validity period, but not more than two minutes. Thus a small difference
+between the two clocks does not cause a failure.
 
 **Step 2 — the X509-SVID rules** ([`verifier.go:182-215`]). The leaf certificate
 is not a CA. It does not have `keyCertSign` or `cRLSign`. It has
@@ -417,61 +423,50 @@ connection after one minute. It waits 10 seconds for the answer. The server does
 not set a maximum age for a connection, because a job can stream output for a
 long time.
 
-## From the identity to the authorization
+## The identity at each RPC
 
-The authentication gives the name of the caller. The authorization decides what
-that caller can do. The two steps are separate.
+The handshake authenticates the connection. The gRPC layer then reads the
+identity again, for each RPC.
 
 The TLS configuration goes to gRPC through `credentials.NewTLS`. See
 [`internal/client/client.go:71`] and [`internal/server/server.go:142`]. The
-server then does these steps for each RPC
-([`internal/server/interceptor.go:146-215`]):
+server interceptor then reads the peer
+([`internal/server/interceptor.go:185-215`]):
 
 ```go
 tlsInfo, isTLS := peerInfo.AuthInfo.(credentials.TLSInfo)   // non-TLS → Unauthenticated
 agentID, err := i.authenticator.Authenticate(tlsInfo.State) // re-verifies the chain
 ```
 
-1. The function `actionFor` ([`interceptor.go:273-290`]) maps the RPC method to
-   an action. The actions are `Start`, `Stop`, `GetStatus`, and `StreamOutput`.
-   An unknown method gives an `Internal` error. The server does not serve it.
-2. The function `Authenticate` ([`authenticator.go:138`]) verifies the chain
-   again. It does not use the result of the handshake. Thus the result is
-   correct for each `tls.Config`.
-3. The function `Authorize` ([`authz/authorizer.go:92`]) reads the role of the
-   agent from the file `roles.json`. The role `USER` permits the four actions.
-4. The server puts the `AgentID` into the context ([`interceptor.go:182`]). The
-   handler reads it from there.
+The function `Authenticate` ([`authenticator.go:138`]) verifies the chain again.
+It does not use the result of the handshake. Thus the result is correct for each
+`tls.Config`. The server puts the `AgentID` into the context
+([`interceptor.go:182`]). The handler reads it from there.
 
 For a stream, the server resolves the agent one time, when the stream opens
 ([`interceptor.go:90`]). It does not do this for each message. The verification
 of a chain is not free.
 
-The error messages are short on purpose. A denied caller gets
-`PermissionDenied` and the text `permission denied` ([`interceptor.go:177`]). A
-caller that fails the authentication gets `Unauthenticated` and the text
-`unauthenticated` ([`interceptor.go:211`]). The reason stays in the log of the
-server. The caller does not learn it.
+The error message is short on purpose. A caller that fails the authentication
+gets `Unauthenticated` and the text `unauthenticated` ([`interceptor.go:211`]).
+The reason stays in the log of the server. The caller does not learn it.
 
 ## The audit record
 
-The `Authenticator` records the result of each connection
-([`authenticator.go:20-22`]).
+The `Authenticator` records the result of each connection ([`doc.go:20-22`]).
 
 **At start-up** ([`authenticator.go:239-248`]): the path of the trust bundle,
 the number of roots, and the earliest expiry date of a root. That date is the
 date before which you must restart the process.
 
 **For an accepted peer** ([`authenticator.go:255-266`]): the side (`client` or
-`server`), the SPIFFE ID, the serial number of the certificate, and the
-`AgentID`.
+`server`), the SPIFFE ID, and the serial number of the certificate. The line for
+a client peer also carries the `AgentID` ([`authenticator.go:160`]). The server
+SVID carries no agent, so the line for a server peer has no such field.
 
 **For a rejected peer** ([`authenticator.go:272-286`]): the side, the reason,
 and the serial number of the certificate that the peer sent. The SPIFFE ID is
 not a separate field here, because it is not verified on this path.
-
-**For each authorization decision** ([`interceptor.go:219-240`]): the `AgentID`,
-the action, the decision (`allow` or `deny`), and the job ID if there is one.
 
 The log never contains a private key or a full certificate in PEM format
 ([`README.md:467-468`]). The test `TestHandshakeAudit` asserts that the log does
@@ -489,8 +484,10 @@ the old one expires in less than one day ([`makefile:66-79`]). It keeps the
 private key and changes only the certificate ([`README.md:554-558`]).
 
 **The validity period.** The CA is valid for 1825 days. A leaf certificate is
-valid for a short period, on the order of days ([`README.md:495-497`]). A short
-period is the answer to a leaked key, because this project has no revocation.
+valid for a short period, on the order of days ([`README.md:495-497`]). This
+project issues a leaf certificate with a validity period of 7 days
+([`makefile:153-164`]). A short period is the answer to a leaked key, because
+this project has no revocation.
 
 **The expiry during a connection.** The server does not disconnect a client when
 the certificate of that client expires ([`README.md:347-348`]). The verification
@@ -513,11 +510,11 @@ Read this section before you use this design in a different project.
 - **The CA is one point of failure.** A person with `ca-private.key` can make a
   certificate for each identity. No program at run time reads this file. Only
   the makefile reads it, and only to sign.
-- **mTLS does not give authorization.** The file `roles.json` gives it, and that
-  file is separate.
+- **mTLS does not give authorization.** It gives the `AgentID` only. The
+  permissions of that agent stay outside the mTLS code.
 - **The verification has a cost.** The server verifies the chain again for each
-  RPC ([`authenticator.go:126-137`]). This is a deliberate exchange: correctness
-  for speed.
+  RPC ([`authenticator.go:126-137`]). The project accepts a lower speed to get
+  correctness.
 
 ## Where the code is
 
@@ -526,7 +523,6 @@ Read this section before you use this design in a different project.
 | `internal/authn` | The mTLS policy of this project: the trust domain, the skew, the two identities, the `AgentID` |
 | `internal/authn/spiffeid` | The parser for a SPIFFE ID. It is domain-free |
 | `internal/authn/x509svid` | The verification of an X509-SVID chain. It is domain-free |
-| `internal/authz` | The roles and the actions |
 | `internal/server` | The gRPC server and the interceptors |
 | `internal/client` | The gRPC client |
 | `internal/testpki` | A CA for the tests |
@@ -553,9 +549,10 @@ the first gRPC message.
 [`authenticator.go:126-137`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L126-L137
 [`authenticator.go:138`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L138
 [`authenticator.go:147-151`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L147-L151
+[`authenticator.go:160`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L160
 [`authenticator.go:17`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L17
 [`authenticator.go:188`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L188
-[`authenticator.go:20-22`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L20-L22
+[`authenticator.go:19-22`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L19-L22
 [`authenticator.go:207`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L207
 [`authenticator.go:223`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L223
 [`authenticator.go:239-248`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L239-L248
@@ -565,9 +562,9 @@ the first gRPC message.
 [`authenticator.go:92`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L92
 [`authenticator.go:98-101`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator.go#L98-L101
 [`authenticator_test.go:1370`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/authenticator_test.go#L1370
-[`authz/authorizer.go:92`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authz/authorizer.go#L92
 [`cmd/fizzle/flags.go:12-17`]: https://github.com/tkngch/fizzled-go/blob/main/cmd/fizzle/flags.go#L12-L17
 [`cmd/fizzled/flags.go:12-19`]: https://github.com/tkngch/fizzled-go/blob/main/cmd/fizzled/flags.go#L12-L19
+[`doc.go:20-22`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/doc.go#L20-L22
 [`doc.go:29-31`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/doc.go#L29-L31
 [`doc.go:33-38`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/doc.go#L33-L38
 [`identity.go:106`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/identity.go#L106
@@ -576,15 +573,12 @@ the first gRPC message.
 [`identity.go:39-58`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/identity.go#L39-L58
 [`identity.go:62-80`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/identity.go#L62-L80
 [`identity.go:85-96`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/identity.go#L85-L96
-[`interceptor.go:177`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L177
 [`interceptor.go:182`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L182
 [`interceptor.go:211`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L211
-[`interceptor.go:219-240`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L219-L240
-[`interceptor.go:273-290`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L273-L290
 [`interceptor.go:90`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L90
 [`internal/authn/tlsconfig.go:28`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/tlsconfig.go#L28
 [`internal/client/client.go:71`]: https://github.com/tkngch/fizzled-go/blob/main/internal/client/client.go#L71
-[`internal/server/interceptor.go:146-215`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L146-L215
+[`internal/server/interceptor.go:185-215`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/interceptor.go#L185-L215
 [`internal/server/server.go:142`]: https://github.com/tkngch/fizzled-go/blob/main/internal/server/server.go#L142
 [`makefile:106-110`]: https://github.com/tkngch/fizzled-go/blob/main/makefile#L106-L110
 [`makefile:115-122`]: https://github.com/tkngch/fizzled-go/blob/main/makefile#L115-L122
@@ -606,7 +600,7 @@ the first gRPC message.
 [`tlsconfig.go:49`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/tlsconfig.go#L49
 [`tlsconfig.go:5-7`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/tlsconfig.go#L5-L7
 [`tlsconfig.go:51`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/tlsconfig.go#L51
-[`tlsconfig.go:61-64`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/tlsconfig.go#L61-L64
+[`tlsconfig.go:60-63`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/tlsconfig.go#L60-L63
 [`trustbundle.go:105-113`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/trustbundle.go#L105-L113
 [`trustbundle.go:41-53`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/trustbundle.go#L41-L53
 [`trustbundle.go:59-121`]: https://github.com/tkngch/fizzled-go/blob/main/internal/authn/trustbundle.go#L59-L121
